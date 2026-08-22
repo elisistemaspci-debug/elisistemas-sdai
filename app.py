@@ -3,6 +3,7 @@ import io
 import json
 import sqlite3
 import shutil
+import calendar
 from datetime import datetime
 import streamlit as st
 import pandas as pd
@@ -185,7 +186,91 @@ if not st.session_state["logged_in"]:
                 st.error("Usuário ou senha incorretos.")
     st.stop()
 
-# --- MÉRITO GERADOR DE PDFS (REPORTLAB) ---
+# --- FUNÇÃO PARA GERAR PDF EM FORMATO DE CALENDÁRIO ---
+def gerar_pdf_calendario(ano, mes):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, 
+        pagesize=(A4[1], A4[0]), 
+        rightMargin=15, 
+        leftMargin=15, 
+        topMargin=15, 
+        bottomMargin=15
+    )
+    story = []
+    styles = getSampleStyleSheet()
+
+    style_titulo = ParagraphStyle('CalTitulo', parent=styles['Heading1'], fontSize=14, leading=16, fontName='Helvetica-Bold', alignment=1)
+    style_dia_num = ParagraphStyle('DiaNum', parent=styles['Normal'], fontSize=9, leading=10, fontName='Helvetica-Bold', textColor=colors.HexColor("#2C3E50"))
+    style_tarefa = ParagraphStyle('TarefaCal', parent=styles['Normal'], fontSize=6.5, leading=7.5, textColor=colors.HexColor("#16A085"))
+    style_cab_dia = ParagraphStyle('CabDia', parent=styles['Normal'], fontSize=9, leading=10, fontName='Helvetica-Bold', alignment=1, textColor=colors.whitesmoke)
+
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT task, due_date, status FROM agenda")
+    rows = cursor.fetchall()
+    conn.close()
+
+    tarefas_por_dia = {}
+    for task, due_date, status in rows:
+        try:
+            dt = datetime.strptime(due_date, "%Y-%m-%d")
+            if dt.year == ano and dt.month == mes:
+                d = dt.day
+                if d not in tarefas_por_dia:
+                    tarefas_por_dia[d] = []
+                tarefas_por_dia[d].append((task, status))
+        except:
+            pass
+
+    meses_pt = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    story.append(Paragraph(f"<b>AGENDA DE MANUTENÇÕES & ATIVIDADES - {meses_pt[mes].upper()} / {ano}</b>", style_titulo))
+    story.append(Paragraph(f"<font size=8>{empresa_db.get('nome', '')}</font>", ParagraphStyle('Sub', parent=styles['Normal'], alignment=1)))
+    story.append(Spacer(1, 8))
+
+    dias_semana = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+    tabela_dados = [[Paragraph(f"<b>{d}</b>", style_cab_dia) for d in dias_semana]]
+
+    cal = calendar.Calendar(firstweekday=0)
+    mes_matriz = cal.monthdayscalendar(ano, mes)
+
+    for semana in mes_matriz:
+        linha_semana = []
+        for dia in semana:
+            if dia == 0:
+                linha_semana.append(Paragraph("", style_dia_num))
+            else:
+                conteudo = [Paragraph(f"<b>{dia}</b>", style_dia_num)]
+                if dia in tarefas_por_dia:
+                    for t_desc, t_stat in tarefas_por_dia[dia]:
+                        check = "✔ " if t_stat == "Realizado" else "• "
+                        conteudo.append(Paragraph(f"{check}{t_desc}", style_tarefa))
+                linha_semana.append(conteudo)
+        tabela_dados.append(linha_semana)
+
+    largura_col = 114
+    t_cal = Table(tabela_dados, colWidths=[largura_col]*7)
+    
+    estilo_tabela = [
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#BDC3C7")),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+    ]
+    
+    for i in range(1, len(tabela_dados)):
+        estilo_tabela.append(('ROWBACKGROUNDS', (0, i), (-1, i), [colors.whitesmoke if i % 2 == 0 else colors.HexColor("#FAFAFA")]))
+
+    t_cal.setStyle(TableStyle(estilo_tabela))
+    story.append(t_cal)
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+# --- MÉRITO GERADOR DE PDFS DE VISTORIA (REPORTLAB) ---
 def gerar_pdf_preventiva():
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -364,7 +449,6 @@ if st.sidebar.button("🚪 Sair / Logout"):
 
 st.sidebar.divider()
 
-# DEFINIÇÃO DO MENU DE ACORDO COM O PERFIL
 if st.session_state["perfil"] == "cliente":
     menu_opcoes = ["📞 Abertura e Acompanhamento de Chamados"]
 else:
@@ -460,26 +544,44 @@ if menu == "📞 Abertura e Acompanhamento de Chamados":
 # ==============================================================================
 elif menu == "📅 Agenda Principal":
     st.title("📅 Agenda de Atividades e Manutenções")
-    with st.form("new_task_form", clear_on_submit=True):
-        st.subheader("Cadastrar Nova Tarefa")
-        col1, col2, col3 = st.columns(3)
-        with col1:
+    
+    col_ag1, col_ag2 = st.columns([2, 1])
+    
+    with col_ag2:
+        st.subheader("📄 Exportar Calendário PDF")
+        hoje = datetime.today()
+        mes_pdf = st.selectbox("Mês", list(range(1, 13)), index=hoje.month - 1)
+        ano_pdf = st.number_input("Ano", min_value=2024, max_value=2035, value=hoje.year)
+        
+        pdf_cal = gerar_pdf_calendario(ano_pdf, mes_pdf)
+        st.download_button(
+            "📅 Baixar Calendário (PDF)",
+            data=pdf_cal,
+            file_name=f"Calendario_Agenda_{mes_pdf}_{ano_pdf}.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+
+    with col_ag1:
+        with st.form("new_task_form", clear_on_submit=True):
+            st.subheader("Cadastrar Nova Tarefa")
             task_name = st.text_input("Descrição da Tarefa / Serviço")
-        with col2:
-            category = st.selectbox("Período / Categoria", ["Diária", "Semanal", "Mensal", "Trimestral", "Anual"])
-        with col3:
-            due_date = st.date_input("Data Alvo", value=datetime.today())
-            
-        submitted = st.form_submit_button("Cadastrar na Agenda")
-        if submitted and task_name:
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO agenda (task, category, due_date, status) VALUES (?, ?, ?, ?)",
-                           (task_name, category, str(due_date), "Não realizado"))
-            conn.commit()
-            conn.close()
-            st.success("Tarefa cadastrada com sucesso!")
-            st.rerun()
+            col1, col2 = st.columns(2)
+            with col1:
+                category = st.selectbox("Período / Categoria", ["Diária", "Semanal", "Mensal", "Trimestral", "Anual"])
+            with col2:
+                due_date = st.date_input("Data Alvo", value=datetime.today())
+                
+            submitted = st.form_submit_button("Cadastrar na Agenda")
+            if submitted and task_name:
+                conn = sqlite3.connect(DB_FILE)
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO agenda (task, category, due_date, status) VALUES (?, ?, ?, ?)",
+                               (task_name, category, str(due_date), "Não realizado"))
+                conn.commit()
+                conn.close()
+                st.success("Tarefa cadastrada com sucesso!")
+                st.rerun()
 
     st.divider()
     conn = sqlite3.connect(DB_FILE)
@@ -668,7 +770,6 @@ elif menu == "📂 Histórico & Pasta do Cliente":
                         data_hist = item.get('data', 'N/A')
                         
                         with st.expander(f"📌 {tipo} - Data: {data_hist}"):
-                            # Se for atualização ou abertura de chamado
                             if "Chamado" in tipo:
                                 if item.get("status"):
                                     st.markdown(f"**Status:** `{item.get('status')}`")
@@ -681,7 +782,6 @@ elif menu == "📂 Histórico & Pasta do Cliente":
                                 if item.get("conclusao"):
                                     st.success(f"**✅ Conclusão Técnica:**\n\n{item.get('conclusao')}")
                             
-                            # Se for relatório de vistoria
                             elif "Relatório" in tipo:
                                 st.markdown(f"**Técnico Resp.:** {item.get('resp_tecnico', 'N/A')}")
                                 st.markdown(f"**Status Geral:** {item.get('status_geral', 'N/A')}")
@@ -697,7 +797,6 @@ elif menu == "📂 Histórico & Pasta do Cliente":
                                                 mime="application/pdf",
                                                 key=f"btn_hist_{arq}_{data_hist}"
                                             )
-                            # Caso genérico
                             else:
                                 for k, v in item.items():
                                     if k not in ["tipo", "data"]:
