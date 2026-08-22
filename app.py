@@ -13,6 +13,7 @@ DB_FILE = "eli_sistemas.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
+    
     # Tabela de Relatórios e Vistorias
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS reports (
@@ -24,6 +25,7 @@ def init_db():
             type TEXT
         )
     ''')
+    
     # Tabela de Agenda (Diária, Semanal, Mensal)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS agenda (
@@ -34,6 +36,7 @@ def init_db():
             status TEXT
         )
     ''')
+    
     # Tabela de Equipamentos / Quantidades
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS equipment (
@@ -45,6 +48,32 @@ def init_db():
             notes TEXT
         )
     ''')
+
+    # Tabela de Chamados / Ordens de Serviço (Versão Antiga Integrada)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS service_calls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client TEXT,
+            service_type TEXT,
+            description TEXT,
+            priority TEXT,
+            status TEXT,
+            date TEXT
+        )
+    ''')
+
+    # Tabela de Cadastro de Clientes (Versão Antiga Integrada)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS clients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            cnpj TEXT,
+            phone TEXT,
+            address TEXT,
+            notes TEXT
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -70,10 +99,12 @@ menu = st.sidebar.selectbox("Navegação", [
     "📅 Agenda Principal", 
     "📋 Relatórios e Vistorias", 
     "🔧 Controle de Equipamentos / Preventiva", 
+    "📞 Chamados e Ordens de Serviço",
+    "👥 Cadastro de Clientes",
     "💾 Backup Diário"
 ])
 
-# Logotipo/Cabeçalho padrão para todos os relatórios, vistorias e agenda impressos
+# Logotipo/Cabeçalho padrão para todos os documentos impressos
 LOGO_HTML = '''
 <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #b71c1c; padding-bottom: 10px; margin-bottom: 20px;">
     <div>
@@ -92,7 +123,7 @@ LOGO_HTML = '''
 # ==========================================
 if menu == "📅 Agenda Principal":
     st.title("📅 Agenda de Atividades")
-    st.write("Gerencie suas tarefas diárias, semanais e mensais com controle de status e opção de exportação em PDF.")
+    st.write("Gerencie suas tarefas diárias, semanais e mensais com controle de status e opção de exportação.")
     
     with st.form("new_task_form", clear_on_submit=True):
         st.subheader("Cadastrar Nova Tarefa")
@@ -153,52 +184,6 @@ if menu == "📅 Agenda Principal":
                     conn.commit()
                     conn.close()
                     st.rerun()
-        
-        st.divider()
-        st.subheader("🖨️ Exportar / Imprimir Agenda Completa em PDF")
-        agenda_html = f'''
-        <div style="border: 1px solid #ccc; padding: 25px; border-radius: 8px; background: white; color: black; font-family: Arial, sans-serif;">
-            {LOGO_HTML}
-            <h3 style="color: #222; margin-bottom: 5px;">Relatório de Agenda ({filter_cat})</h3>
-            <p style="margin: 4px 0; color: #555;">Emitido em: {datetime.now().strftime("%d/%m/%Y %H:%M")}</p>
-            <hr style="border:0; border-top:1px solid #ddd; margin: 15px 0;">
-            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
-                <thead>
-                    <tr style="background-color: #f2f2f2; border-bottom: 2px solid #ddd;">
-                        <th style="padding: 8px; text-align: left;">Tarefa</th>
-                        <th style="padding: 8px; text-align: left;">Categoria</th>
-                        <th style="padding: 8px; text-align: left;">Data</th>
-                        <th style="padding: 8px; text-align: left;">Status</th>
-                    </tr>
-                </thead>
-                <tbody>
-        '''
-        for _, r in filtered_df.iterrows():
-            status_style = "color: green; font-weight: bold;" if r['status'] == "Realizado" else "color: #d97706; font-weight: bold;"
-            agenda_html += f'''
-                <tr style="border-bottom: 1px solid #eee;">
-                    <td style="padding: 8px;">{r['task']}</td>
-                    <td style="padding: 8px;">{r['category']}</td>
-                    <td style="padding: 8px;">{r['due_date']}</td>
-                    <td style="padding: 8px;"><span style="{status_style}">{r['status']}</span></td>
-                </tr>
-            '''
-        agenda_html += '''
-                </tbody>
-            </table>
-            <br><br>
-            <div style="margin-top: 40px; font-size: 12px; text-align: center;">
-                ____________________________________________<br>Eli Sistemas - Controle Técnico e Operacional
-            </div>
-        </div>
-        '''
-        st.markdown(agenda_html, unsafe_allow_html=True)
-        st.download_button(
-            "📥 Baixar Agenda em Formato PDF / HTML", 
-            data=agenda_html, 
-            file_name=f"agenda_eli_sistemas_{datetime.now().strftime('%Y%m%d')}.html", 
-            mime="text/html"
-        )
     else:
         st.info("Nenhuma tarefa cadastrada na agenda.")
 
@@ -207,7 +192,7 @@ if menu == "📅 Agenda Principal":
 # ==========================================
 elif menu == "📋 Relatórios e Vistorias":
     st.title("📋 Emissão de Relatórios e Vistorias")
-    st.write("Todos os relatórios impressos ou gerados contêm o logotipo oficial da Eli Sistemas.")
+    st.write("Todos os relatórios gerados contêm o logotipo oficial da Eli Sistemas.")
     
     with st.form("report_form", clear_on_submit=True):
         st.subheader("Novo Relatório / Vistoria")
@@ -301,7 +286,91 @@ elif menu == "🔧 Controle de Equipamentos / Preventiva":
         st.info("Nenhum equipamento cadastrado.")
 
 # ==========================================
-# 4. BACKUP DIÁRIO
+# 4. CHAMADOS E ORDENS DE SERVIÇO
+# ==========================================
+elif menu == "📞 Chamados e Ordens de Serviço":
+    st.title("📞 Gestão de Chamados e O.S.")
+    st.write("Abra e acompanhe chamados técnicos, manutenções corretivas e ordens de serviço.")
+
+    with st.form("call_form", clear_on_submit=True):
+        st.subheader("Novo Chamado / Ordem de Serviço")
+        c_client = st.text_input("Cliente / Empresa")
+        c_type = st.selectbox("Tipo de Atendimento", ["Manutenção Corretiva", "Chamado Técnico URGENTE", "Instalação", "Visita de Diagnóstico"])
+        c_desc = st.text_area("Descrição do Problema ou Solicitação")
+        c_priority = st.selectbox("Prioridade", ["Baixa", "Média", "Alta", "Urgente"])
+        
+        c_submit = st.form_submit_button("Registrar Chamado")
+        if c_submit and c_client:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO service_calls (client, service_type, description, priority, status, date) VALUES (?, ?, ?, ?, ?, ?)",
+                           (c_client, c_type, c_desc, c_priority, "Aberto", datetime.now().strftime("%d/%m/%Y %H:%M")))
+            conn.commit()
+            conn.close()
+            st.success("Chamado registrado com sucesso!")
+
+    st.divider()
+    st.subheader("Chamados Registrados")
+    conn = sqlite3.connect(DB_FILE)
+    df_calls = pd.read_sql("SELECT * FROM service_calls ORDER BY id DESC", conn)
+    conn.close()
+
+    if not df_calls.empty:
+        for idx, row in df_calls.iterrows():
+            with st.expander(f"[{row['status']}] O.S. #{row['id']} - {row['client']} ({row['service_type']})"):
+                st.write(f"**Prioridade:** {row['priority']}")
+                st.write(f"**Data:** {row['date']}")
+                st.write(f"**Descrição:** {row['description']}")
+                
+                new_call_status = st.selectbox("Alterar Status", ["Aberto", "Em Andamento", "Concluído"], key=f"c_status_{row['id']}", index=["Aberto", "Em Andamento", "Concluído"].index(row['status']))
+                if new_call_status != row['status']:
+                    conn = sqlite3.connect(DB_FILE)
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE service_calls SET status = ? WHERE id = ?", (new_call_status, row['id']))
+                    conn.commit()
+                    conn.close()
+                    st.rerun()
+    else:
+        st.info("Nenhum chamado registrado.")
+
+# ==========================================
+# 5. CADASTRO DE CLIENTES
+# ==========================================
+elif menu == "👥 Cadastro de Clientes":
+    st.title("👥 Cadastro de Clientes")
+    st.write("Gerencie os dados cadastrais dos seus clientes e locais atendidos.")
+
+    with st.form("client_form", clear_on_submit=True):
+        st.subheader("Novo Cliente")
+        cl_name = st.text_input("Nome da Empresa / Cliente")
+        cl_cnpj = st.text_input("CNPJ / CPF")
+        cl_phone = st.text_input("Telefone de Contato")
+        cl_address = st.text_input("Endereço Completo")
+        cl_notes = st.text_area("Observações / Contornos Importantes")
+
+        cl_submit = st.form_submit_button("Salvar Cliente")
+        if cl_submit and cl_name:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO clients (name, cnpj, phone, address, notes) VALUES (?, ?, ?, ?, ?)",
+                           (cl_name, cl_cnpj, cl_phone, cl_address, cl_notes))
+            conn.commit()
+            conn.close()
+            st.success("Cliente cadastrado com sucesso!")
+
+    st.divider()
+    st.subheader("Clientes Cadastrados")
+    conn = sqlite3.connect(DB_FILE)
+    df_clients = pd.read_sql("SELECT * FROM clients ORDER BY id DESC", conn)
+    conn.close()
+
+    if not df_clients.empty:
+        st.dataframe(df_clients, use_container_width=True)
+    else:
+        st.info("Nenhum cliente cadastrado.")
+
+# ==========================================
+# 6. BACKUP DIÁRIO
 # ==========================================
 elif menu == "💾 Backup Diário":
     st.title("💾 Central de Backup do Sistema")
