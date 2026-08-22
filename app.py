@@ -61,12 +61,12 @@ def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict):
         except:
             pass
             
-        detalhes_dict["data"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        detalhes_dict["tipo"] = tipo_acao
-        historico_lista.append(detalhes_dict)
-        
-        with open(historico_path, "w", encoding="utf-8") as f_hist:
-            json.dump(historico_lista, f_hist, ensure_ascii=False, indent=4)
+    detalhes_dict["data"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    detalhes_dict["tipo"] = tipo_acao
+    historico_lista.append(detalhes_dict)
+    
+    with open(historico_path, "w", encoding="utf-8") as f_hist:
+        json.dump(historico_lista, f_hist, ensure_ascii=False, indent=4)
 
 # Carregamento inicial de dados
 clientes_db = carregar_json(CLIENTES_FILE, {})
@@ -113,6 +113,35 @@ ITENS_SECOES = {
         ("6.2 Portas Corta-Fogo / Eletroímãs", "Liberação automática dos eletroímãs em caso de alarme geral")
     ]
 }
+
+# --- CONFIGURAÇÃO DA PÁGINA E CONTROLE DE AUTENTICAÇÃO ---
+st.set_page_config(page_title="SDAI - Gestão & Inspeção Técnica", layout="wide")
+
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+    st.session_state["user"] = ""
+    st.session_state["perfil"] = ""
+
+# Se não estiver logado, exibe apenas a tela de login e interrompe a execução
+if not st.session_state["logged_in"]:
+    st.title("🔥 SDAI - Sistema de Gestão e Inspeção Técnica")
+    st.subheader("Login de Acesso")
+    
+    with st.form("form_login"):
+        u_input = st.text_input("Usuário")
+        s_input = st.text_input("Senha", type="password")
+        btn_login = st.form_submit_button("Entrar")
+        
+        if btn_login:
+            if u_input in usuarios and usuarios[u_input]["senha"] == s_input:
+                st.session_state["logged_in"] = True
+                st.session_state["user"] = u_input
+                st.session_state["perfil"] = usuarios[u_input].get("perfil", "cliente")
+                st.success("Login efetuado com sucesso!")
+                st.rerun()
+            else:
+                st.error("Usuário ou senha incorretos.")
+    st.stop()
 
 def gerar_pdf_preventiva():
     buffer = io.BytesIO()
@@ -289,33 +318,217 @@ def gerar_pdf_preventiva():
 
     return pdf_data
 
-
-st.set_page_config(page_title="SDAI - Gestão & Inspeção Técnica", layout="wide")
-
-if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
-    st.session_state["user"] = ""
-    st.session_state["perfil"] = ""
-
-if not st.session_state["logged_in"]:
-    st.title("🔥 SDAI - Sistema de Gestão e Inspeção Técnica")
-    st.subheader("Login de Acesso")
+def gerar_pdf_chamado_simples():
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+    story = []
+    styles = getSampleStyleSheet()
     
-    with st.form("form_login"):
-        u_input = st.text_input("Usuário")
-        s_input = st.text_input("Senha", type="password")
-        btn_login = st.form_submit_button("Entrar")
+    style_celula = ParagraphStyle('CelTabela', parent=styles['Normal'], fontSize=8, leading=9, textColor=colors.black)
+    style_texto_empresa = ParagraphStyle('EmpresaText', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.black)
+    style_sec_header = ParagraphStyle('SecHeader', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.black)
+
+    logo_w, logo_h = 45, 30
+    if os.path.exists(LOGO_PATH):
+        img_logo = Image(LOGO_PATH, width=logo_w, height=logo_h)
+    else:
+        img_logo = Paragraph("<b>LOGO</b>", style_celula)
+
+    info_empresa_texto = f"""
+    <b>{empresa_db.get('nome', '')}</b><br/>
+    CNPJ: {empresa_db.get('cnpj', '')} | CREA: {empresa_db.get('crea', '')} | Tel: {empresa_db.get('telefone', '')}<br/>
+    E-mail: {empresa_db.get('email', '')} | Endereço: {empresa_db.get('endereco', '')}<br/>
+    <b>RELATÓRIO TÉCNICO DE ATENDIMENTO / CHAMADO / VISTORIA SIMPLES</b>
+    """
+    
+    tabela_cabecalho = Table([[Paragraph(info_empresa_texto, style_texto_empresa), img_logo]], colWidths=[495, 60])
+    tabela_cabecalho.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('ALIGN', (1, 0), (1, 0), 'RIGHT'), ('BOTTOMPADDING', (0, 0), (-1, -1), 6)]))
+    story.append(tabela_cabecalho)
+    story.append(Spacer(1, 4))
+
+    story.append(Paragraph("<b>1. DADOS DA EDIFICAÇÃO E DO ATENDIMENTO</b>", style_sec_header))
+    dados_edif = [
+        [Paragraph(f"<b>CLIENTE:</b> {st.session_state.get('cs_cliente', '')}", style_celula), Paragraph(f"<b>Data:</b> {st.session_state.get('cs_data', '')}", style_celula)],
+        [Paragraph(f"<b>CNPJ:</b> {st.session_state.get('cs_cnpj', '')}", style_celula), Paragraph(f"<b>Tipo de Atendimento:</b> {st.session_state.get('cs_tipo', '')}", style_celula)],
+        [Paragraph(f"<b>Endereço:</b> {st.session_state.get('cs_endereco', '')}", style_celula), Paragraph(f"<b>Responsável Técnico:</b> {st.session_state.get('cs_resp_tecnico', '')}", style_celula)],
+        [Paragraph(f"<b>Cidade / UF:</b> {st.session_state.get('cs_cidade_uf', '')}", style_celula), Paragraph(f"<b>Solicitante / Contato:</b> {st.session_state.get('cs_acompanhante', '')}", style_celula)],
+    ]
+    t_edif = Table(dados_edif, colWidths=[330, 225])
+    t_edif.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey), ('TOPPADDING', (0,0), (-1,-1), 2), ('BOTTOMPADDING', (0,0), (-1,-1), 2)]))
+    story.append(t_edif)
+    story.append(Spacer(1, 4))
+
+    story.append(Paragraph("<b>2. INFORMAÇÕES DO SISTEMA SDAI NO LOCAL</b>", style_sec_header))
+    dados_tec = [
+        [Paragraph(f"<b>Central SDAI:</b> {st.session_state.get('cs_central_sdai', '')}", style_celula), Paragraph(f"<b>Tipo Central:</b> {st.session_state.get('cs_tipo_central', '')}", style_celula), Paragraph(f"<b>Qtd. Laços / Zonas:</b> {st.session_state.get('cs_qtd_lacos', '')}", style_celula)],
+    ]
+    t_tec = Table(dados_tec, colWidths=[185, 185, 185])
+    t_tec.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey), ('TOPPADDING', (0,0), (-1,-1), 2), ('BOTTOMPADDING', (0,0), (-1,-1), 2)]))
+    story.append(t_tec)
+    story.append(Spacer(1, 4))
+
+    story.append(Paragraph("<b>3. DESCRIÇÃO TÉCNICA / RELATO DO ATENDIMENTO</b>", style_sec_header))
+    relato_texto = f"<b>Relatório / Escopo Executado / Ocorrência:</b><br/>{st.session_state.get('cs_relato', 'Nenhum relato informado.')}"
+    t_relato = Table([[Paragraph(relato_texto, style_celula)]], colWidths=[555])
+    t_relato.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('TOPPADDING', (0,0), (-1,-1), 6), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
+    story.append(t_relato)
+    story.append(Spacer(1, 6))
+
+    story.append(Paragraph("<b>4. VALIDAÇÃO E ASSINATURAS</b>", style_sec_header))
+    assinaturas_data = [[
+        Paragraph(f"<b>Responsável Técnico:</b> {st.session_state.get('cs_resp_tecnico', '')}<br/>CREA: {empresa_db.get('crea', '')}<br/><br/><br/>________________________________________<br/>Assinatura do Técnico", style_celula),
+        Paragraph(f"<b>Recebedor / Solicitante:</b> {st.session_state.get('cs_acompanhante', '')}<br/><br/><br/><br/>________________________________________<br/>Assinatura do Cliente", style_celula)
+    ]]
+    t_ass = Table(assinaturas_data, colWidths=[277, 278])
+    t_ass.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey), ('TOPPADDING', (0,0), (-1,-1), 6), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
+    story.append(t_ass)
+
+    fotos = st.session_state.get("cs_fotos_carregadas", [])
+    if fotos:
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("<b>5. REGISTRO FOTOGRÁFICO</b>", style_sec_header))
+        story.append(Spacer(1, 4))
         
-        if btn_login:
-            if u_input in usuarios and usuarios[u_input]["senha"] == s_input:
-                st.session_state["logged_in"] = True
-                st.session_state["user"] = u_input
-                st.session_state["perfil"] = usuarios[u_input].get("perfil", "cliente")
-                st.success("Login efetuado com sucesso!")
-                st.rerun()
-            else:
-                st.error("Usuário ou senha incorretos.")
-    st.stop()
+        linhas_fotos = []
+        par_atual = []
+        for f_path in fotos:
+            if os.path.exists(f_path):
+                img_obj = Image(f_path, width=250, height=180)
+                par_atual.append(img_obj)
+                if len(par_atual) == 2:
+                    linhas_fotos.append(par_atual)
+                    par_atual = []
+        if par_atual:
+            par_atual.append(Paragraph("", style_celula))
+            linhas_fotos.append(par_atual)
+
+        for par in linhas_fotos:
+            t_foto = Table([par], colWidths=[277, 278])
+            t_foto.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
+            story.append(t_foto)
+
+    doc.build(story)
+    buffer.seek(0)
+    pdf_data = buffer.getvalue()
+
+    nome_cliente_atual = st.session_state.get('cs_cliente', '').strip()
+    if nome_cliente_atual:
+        nome_pasta_cliente = "".join(c for c in nome_cliente_atual if c.isalnum() or c in (' ', '_', '-')).strip()
+        cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
+        os.makedirs(cliente_dir, exist_ok=True)
+        
+        data_hora_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+        nome_arq_pdf = f"Vistoria_Chamado_{data_hora_str}.pdf"
+        caminho_completo_pdf = os.path.join(cliente_dir, nome_arq_pdf)
+        
+        with open(caminho_completo_pdf, "wb") as f_pdf:
+            f_pdf.write(pdf_data)
+            
+        registrar_historico_cliente(
+            nome_cliente_atual,
+            "Relatório de Vistoria/Chamado Simples",
+            {
+                "arquivo_pdf": nome_arq_pdf,
+                "resp_tecnico": st.session_state.get('cs_resp_tecnico', '')
+            }
+        )
+
+    return pdf_data
+
+def gerar_pdf_orcamento():
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+    story = []
+    styles = getSampleStyleSheet()
+    
+    style_celula = ParagraphStyle('CelTabela', parent=styles['Normal'], fontSize=8, leading=9, textColor=colors.black)
+    style_texto_empresa = ParagraphStyle('EmpresaText', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.black)
+    style_sec_header = ParagraphStyle('SecHeader', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.black)
+
+    logo_w, logo_h = 45, 30
+    if os.path.exists(LOGO_PATH):
+        img_logo = Image(LOGO_PATH, width=logo_w, height=logo_h)
+    else:
+        img_logo = Paragraph("<b>LOGO</b>", style_celula)
+
+    info_empresa_texto = f"""
+    <b>{empresa_db.get('nome', '')}</b><br/>
+    CNPJ: {empresa_db.get('cnpj', '')} | CREA: {empresa_db.get('crea', '')} | Tel: {empresa_db.get('telefone', '')}<br/>
+    E-mail: {empresa_db.get('email', '')} | Endereço: {empresa_db.get('endereco', '')}<br/>
+    <b>PROPOSTA COMERCIAL / ORÇAMENTO DE SERVIÇOS & MATERIAIS</b>
+    """
+    
+    tabela_cabecalho = Table([[Paragraph(info_empresa_texto, style_texto_empresa), img_logo]], colWidths=[495, 60])
+    tabela_cabecalho.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('ALIGN', (1, 0), (1, 0), 'RIGHT'), ('BOTTOMPADDING', (0, 0), (-1, -1), 6)]))
+    story.append(tabela_cabecalho)
+    story.append(Spacer(1, 4))
+
+    story.append(Paragraph("<b>1. DADOS DO CLIENTE</b>", style_sec_header))
+    dados_edif = [
+        [Paragraph(f"<b>CLIENTE:</b> {st.session_state.get('orc_cliente', '')}", style_celula), Paragraph(f"<b>Data da Proposta:</b> {st.session_state.get('orc_data', '')}", style_celula)],
+        [Paragraph(f"<b>CNPJ:</b> {st.session_state.get('orc_cnpj', '')}", style_celula), Paragraph(f"<b>Validade da Proposta:</b> {st.session_state.get('orc_validade', '')}", style_celula)],
+        [Paragraph(f"<b>Endereço:</b> {st.session_state.get('orc_endereco', '')}", style_celula), Paragraph(f"<b>Responsável Técnico:</b> {st.session_state.get('orc_resp_tecnico', '')}", style_celula)],
+        [Paragraph(f"<b>Contato / E-mail:</b> {st.session_state.get('orc_contato', '')} | {st.session_state.get('orc_email', '')}", style_celula), Paragraph("", style_celula)],
+    ]
+    t_edif = Table(dados_edif, colWidths=[330, 225])
+    t_edif.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey), ('TOPPADDING', (0,0), (-1,-1), 2), ('BOTTOMPADDING', (0,0), (-1,-1), 2)]))
+    story.append(t_edif)
+    story.append(Spacer(1, 4))
+
+    story.append(Paragraph("<b>2. ESCOPO DOS SERVIÇOS / FORNECIMENTO</b>", style_sec_header))
+    escopo_texto = f"<b>Descrição Detalhada do Escopo:</b><br/>{st.session_state.get('orc_escopo', 'Nenhum escopo detalhado.')}"
+    t_escopo = Table([[Paragraph(escopo_texto, style_celula)]], colWidths=[555])
+    t_escopo.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('TOPPADDING', (0,0), (-1,-1), 6), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
+    story.append(t_escopo)
+    story.append(Spacer(1, 4))
+
+    story.append(Paragraph("<b>3. VALOR TOTAL E CONDIÇÕES DE PAGAMENTO</b>", style_sec_header))
+    valores_texto = f"""
+    <b>Valor Total do Orçamento:</b> {st.session_state.get('orc_valores', '')}<br/>
+    <b>Condições de Pagamento e Prazo:</b> {st.session_state.get('orc_pagamento', '')}
+    """
+    t_val = Table([[Paragraph(valores_texto, style_celula)]], colWidths=[555])
+    t_val.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('TOPPADDING', (0,0), (-1,-1), 6), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
+    story.append(t_val)
+    story.append(Spacer(1, 6))
+
+    story.append(Paragraph("<b>4. VALIDAÇÃO COMERCIAL</b>", style_sec_header))
+    assinaturas_data = [[
+        Paragraph(f"<b>Prestador:</b> {st.session_state.get('orc_resp_tecnico', '')}<br/>CNPJ: {empresa_db.get('cnpj', '')}<br/><br/><br/>________________________________________<br/>Assinatura / Emissor", style_celula),
+        Paragraph(f"<b>De Acordo (Cliente):</b> {st.session_state.get('orc_cliente', '')}<br/><br/><br/><br/>________________________________________<br/>Aprovação do Cliente", style_celula)
+    ]]
+    t_ass = Table(assinaturas_data, colWidths=[277, 278])
+    t_ass.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey), ('TOPPADDING', (0,0), (-1,-1), 6), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
+    story.append(t_ass)
+
+    doc.build(story)
+    buffer.seek(0)
+    pdf_data = buffer.getvalue()
+
+    nome_cliente_atual = st.session_state.get('orc_cliente', '').strip()
+    if nome_cliente_atual:
+        nome_pasta_cliente = "".join(c for c in nome_cliente_atual if c.isalnum() or c in (' ', '_', '-')).strip()
+        cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
+        os.makedirs(cliente_dir, exist_ok=True)
+        
+        data_hora_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+        nome_arq_pdf = f"Orcamento_{data_hora_str}.pdf"
+        caminho_completo_pdf = os.path.join(cliente_dir, nome_arq_pdf)
+        
+        with open(caminho_completo_pdf, "wb") as f_pdf:
+            f_pdf.write(pdf_data)
+            
+        registrar_historico_cliente(
+            nome_cliente_atual,
+            "Proposta Comercial / Orçamento",
+            {
+                "arquivo_pdf": nome_arq_pdf,
+                "valor": st.session_state.get('orc_valores', ''),
+                "resp_tecnico": st.session_state.get('orc_resp_tecnico', '')
+            }
+        )
+
+    return pdf_data
 
 defaults_vistoria = {
     "cliente": "", "cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP",
@@ -331,6 +544,30 @@ defaults_vistoria = {
 }
 
 for k, v in defaults_vistoria.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+defaults_chamado_simples = {
+    "cs_cliente": "", "cs_cnpj": "", "cs_endereco": "", "cs_cidade_uf": "Ribeirão Preto - SP",
+    "cs_acompanhante": "", "cs_data": datetime.now().strftime("%Y-%m-%d"),
+    "cs_tipo": "Atendimento Corretivo / Chamado Técnico",
+    "cs_resp_tecnico": empresa_db.get("resp_tecnico", "Eli Silva"),
+    "cs_central_sdai": "", "cs_tipo_central": "SISTEMA ENDEREÇÁVEL", "cs_qtd_lacos": "",
+    "cs_relato": "", "cs_fotos_carregadas": []
+}
+
+for k, v in defaults_chamado_simples.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+defaults_orcamento = {
+    "orc_cliente": "", "orc_cnpj": "", "orc_endereco": "", "orc_contato": "", "orc_email": "",
+    "orc_data": datetime.now().strftime("%Y-%m-%d"), "orc_validade": "10 Dias",
+    "orc_resp_tecnico": empresa_db.get("resp_tecnico", "Eli Silva"),
+    "orc_escopo": "", "orc_valores": "", "orc_pagamento": ""
+}
+
+for k, v in defaults_orcamento.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -353,6 +590,8 @@ menu_admin = st.sidebar.radio(
     "Menu Principal",
     [
         "📋 Vistoria & Relatório Técnico",
+        "🛠️ Vistoria Simples / Chamado",
+        "💰 Orçamento Comercial",
         "🏢 Cadastro de Clientes & SDAI",
         "📂 Histórico & Pasta do Cliente",
         "🏢 Dados da Minha Empresa",
@@ -493,7 +732,7 @@ if "📋 Vistoria & Relatório Técnico" in menu_admin:
     sec_nomes = {
         "sec3": "3. Verificação Física e Elétrica da Central e Fontes",
         "sec4": "4. Integridade das Linhas de Sinal (Laços)",
-        "sec5": "5. Ensaios Funcionais & Amostragem de Periféricos",
+        "sec5": "5. Ensios Funcionais & Amostragem de Periféricos",
         "sec6": "6. Pressurização de Escadas de Segurança (IT 13)"
     }
 
@@ -541,6 +780,223 @@ if "📋 Vistoria & Relatório Técnico" in menu_admin:
         label="📄 GERAR, SALVAR NA PASTA E BAIXAR RELATÓRIO PDF",
         data=pdf_bytes,
         file_name=nome_arquivo_pdf,
+        mime="application/pdf",
+        type="primary",
+        use_container_width=True
+    )
+
+elif "🛠️ Vistoria Simples / Chamado" in menu_admin:
+    st.header("🛠️ Relatório Simples de Vistoria / Chamado Técnico")
+    st.info("Formulário simplificado com dados do cliente, informações do SDAI e um campo aberto para digitação do relato técnico e anexo opcional de fotos.")
+
+    def processar_upload_rascunho_cs():
+        arquivo = st.session_state.get("uploader_rascunho_cs")
+        if arquivo is not None:
+            try:
+                rascunho_carregado = json.load(arquivo)
+                for k, v in rascunho_carregado.items():
+                    st.session_state[k] = v
+                st.session_state["_sucesso_rascunho_cs"] = True
+            except Exception as e:
+                st.session_state["_erro_rascunho_cs"] = str(e)
+
+    with st.expander("💾 Salvar / Carregar Rascunho deste Atendimento", expanded=True):
+        col_rasc1, col_rasc2 = st.columns(2)
+        with col_rasc1:
+            st.write("**Exportar Rascunho Atual**")
+            dados_rascunho_cs = {}
+            for k, v in st.session_state.items():
+                if k.startswith("cs_") or k in ["resp_tecnico"]:
+                    try:
+                        json.dumps(v)
+                        dados_rascunho_cs[k] = v
+                    except:
+                        pass
+            json_str_cs = json.dumps(dados_rascunho_cs, ensure_ascii=False, indent=4)
+            st.download_button(
+                label="📥 Baixar Rascunho (.json)",
+                data=json_str_cs,
+                file_name=f"rascunho_chamado_simples_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+                mime="application/json",
+                use_container_width=True
+            )
+        with col_rasc2:
+            st.write("**Importar Rascunho Salvo**")
+            st.file_uploader("Enviar arquivo .json", type=["json"], key="uploader_rascunho_cs", on_change=processar_upload_rascunho_cs)
+            if st.session_state.get("_sucesso_rascunho_cs"):
+                st.success("✅ Rascunho carregado com sucesso!")
+                st.session_state["_sucesso_rascunho_cs"] = False
+            if st.session_state.get("_erro_rascunho_cs"):
+                st.error(f"Erro ao ler rascunho: {st.session_state['_erro_rascunho_cs']}")
+                st.session_state["_erro_rascunho_cs"] = None
+
+    st.divider()
+
+    if clientes_db:
+        st.subheader("📁 Puxar Dados de Cliente Cadastrado")
+        lista_clientes_nomes_cs = ["-- Selecione --"] + list(clientes_db.keys())
+        def ao_selecionar_cliente_cs():
+            cli_nome = st.session_state["select_carregar_cliente_cs"]
+            if cli_nome != "-- Selecione --" and cli_nome in clientes_db:
+                c_info = clientes_db[cli_nome]
+                st.session_state["cs_cliente"] = c_info.get("nome", "")
+                st.session_state["cs_cnpj"] = c_info.get("cnpj", "")
+                st.session_state["cs_endereco"] = c_info.get("endereco", "")
+                st.session_state["cs_cidade_uf"] = c_info.get("cidade_uf", "")
+                st.session_state["cs_central_sdai"] = c_info.get("central_sdai", "")
+                st.session_state["cs_tipo_central"] = c_info.get("tipo_central", "")
+                st.session_state["cs_qtd_lacos"] = c_info.get("qtd_lacos", "")
+        st.selectbox("Selecione o Cliente", lista_clientes_nomes_cs, key="select_carregar_cliente_cs", on_change=ao_selecionar_cliente_cs)
+
+    st.divider()
+    st.subheader("📝 Dados Gerais")
+    col_cs1, col_cs2 = st.columns(2)
+    with col_cs1:
+        st.text_input("Cliente / Empresa", key="cs_cliente")
+        st.text_input("CNPJ", key="cs_cnpj")
+        st.text_input("Endereço", key="cs_endereco")
+        st.text_input("Cidade / UF", key="cs_cidade_uf")
+    with col_cs2:
+        st.text_input("Solicitante / Contato no Local", key="cs_acompanhante")
+        st.text_input("Data do Atendimento", key="cs_data")
+        st.text_input("Tipo de Atendimento", key="cs_tipo")
+        st.text_input("Responsável Técnico", key="cs_resp_tecnico")
+
+    st.divider()
+    st.subheader("⚙️ Informações Técnicas do SDAI")
+    col_tc1, col_tc2, col_tc3 = st.columns(3)
+    with col_tc1:
+        st.text_input("Central SDAI", key="cs_central_sdai")
+    with col_tc2:
+        st.text_input("Tipo Central", key="cs_tipo_central")
+    with col_tc3:
+        st.text_input("Qtd. Laços / Zonas", key="cs_qtd_lacos")
+
+    st.divider()
+    st.subheader("📄 Relato Técnico / Escopo Executado")
+    st.text_area("Descreva detalhadamente a vistoria, o chamado ou os serviços executados:", key="cs_relato", height=150)
+
+    st.subheader("📸 Registro Fotográfico do Atendimento")
+    uploaded_fotos_cs = st.file_uploader("Enviar Fotos", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="uploader_fotos_cs")
+    if uploaded_fotos_cs:
+        for foto in uploaded_fotos_cs:
+            f_path = os.path.join(PASTA_FOTOS_VISTORIA, foto.name)
+            with open(f_path, "wb") as f:
+                f.write(foto.getbuffer())
+            if f_path not in st.session_state["cs_fotos_carregadas"]:
+                st.session_state["cs_fotos_carregadas"].append(f_path)
+        st.success("✅ Fotos carregadas com sucesso!")
+
+    if st.session_state["cs_fotos_carregadas"]:
+        st.write(f"Total de fotos anexadas: {len(st.session_state['cs_fotos_carregadas'])}")
+        if st.button("🗑️ Limpar Fotos Anexadas", key="btn_limpar_fotos_cs"):
+            st.session_state["cs_fotos_carregadas"] = []
+            st.rerun()
+
+    st.divider()
+    pdf_bytes_cs = gerar_pdf_chamado_simples()
+    nome_arq_cs = f"Relatorio_Simples_{st.session_state['cs_cliente'].replace(' ', '_') if st.session_state['cs_cliente'] else 'Geral'}_{datetime.now().strftime('%Y%m%d')}.pdf"
+    
+    st.download_button(
+        label="📄 GERAR, SALVAR NA PASTA DO CLIENTE E BAIXAR PDF",
+        data=pdf_bytes_cs,
+        file_name=nome_arq_cs,
+        mime="application/pdf",
+        type="primary",
+        use_container_width=True
+    )
+
+elif "💰 Orçamento Comercial" in menu_admin:
+    st.header("💰 Elaboração de Orçamento Comercial")
+    st.info("Puxe os dados cadastrados do cliente, defina o escopo de serviços/materiais, os valores e as condições de pagamento.")
+
+    def processar_upload_rascunho_orc():
+        arquivo = st.session_state.get("uploader_rascunho_orc")
+        if arquivo is not None:
+            try:
+                rascunho_carregado = json.load(arquivo)
+                for k, v in rascunho_carregado.items():
+                    st.session_state[k] = v
+                st.session_state["_sucesso_rascunho_orc"] = True
+            except Exception as e:
+                st.session_state["_erro_rascunho_orc"] = str(e)
+
+    with st.expander("💾 Salvar / Carregar Rascunho do Orçamento", expanded=True):
+        col_rasc1, col_rasc2 = st.columns(2)
+        with col_rasc1:
+            st.write("**Exportar Rascunho Atual**")
+            dados_rascunho_orc = {}
+            for k, v in st.session_state.items():
+                if k.startswith("orc_"):
+                    try:
+                        json.dumps(v)
+                        dados_rascunho_orc[k] = v
+                    except:
+                        pass
+            json_str_orc = json.dumps(dados_rascunho_orc, ensure_ascii=False, indent=4)
+            st.download_button(
+                label="📥 Baixar Rascunho (.json)",
+                data=json_str_orc,
+                file_name=f"rascunho_orcamento_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+                mime="application/json",
+                use_container_width=True
+            )
+        with col_rasc2:
+            st.write("**Importar Rascunho Salvo**")
+            st.file_uploader("Enviar arquivo .json", type=["json"], key="uploader_rascunho_orc", on_change=processar_upload_rascunho_orc)
+            if st.session_state.get("_sucesso_rascunho_orc"):
+                st.success("✅ Rascunho carregado com sucesso!")
+                st.session_state["_sucesso_rascunho_orc"] = False
+            if st.session_state.get("_erro_rascunho_orc"):
+                st.error(f"Erro ao ler rascunho: {st.session_state['_erro_rascunho_orc']}")
+                st.session_state["_erro_rascunho_orc"] = None
+
+    st.divider()
+
+    if clientes_db:
+        st.subheader("📁 Puxar Dados do Cliente Cadastrado")
+        lista_clientes_nomes_orc = ["-- Selecione --"] + list(clientes_db.keys())
+        def ao_selecionar_cliente_orc():
+            cli_nome = st.session_state["select_carregar_cliente_orc"]
+            if cli_nome != "-- Selecione --" and cli_nome in clientes_db:
+                c_info = clientes_db[cli_nome]
+                st.session_state["orc_cliente"] = c_info.get("nome", "")
+                st.session_state["orc_cnpj"] = c_info.get("cnpj", "")
+                st.session_state["orc_endereco"] = f"{c_info.get('endereco', '')} - {c_info.get('cidade_uf', '')}"
+                st.session_state["orc_contato"] = c_info.get("contato", "")
+                st.session_state["orc_email"] = c_info.get("email", "")
+        st.selectbox("Selecione o Cliente", lista_clientes_nomes_orc, key="select_carregar_cliente_orc", on_change=ao_selecionar_cliente_orc)
+
+    st.divider()
+    st.subheader("📝 Dados Comerciais")
+    col_orc1, col_orc2 = st.columns(2)
+    with col_orc1:
+        st.text_input("Cliente / Condomínio", key="orc_cliente")
+        st.text_input("CNPJ", key="orc_cnpj")
+        st.text_input("Endereço Completo", key="orc_endereco")
+    with col_orc2:
+        st.text_input("Telefone de Contato", key="orc_contato")
+        st.text_input("E-mail", key="orc_email")
+        st.text_input("Data da Proposta", key="orc_data")
+        st.text_input("Validade da Proposta", key="orc_validade")
+        st.text_input("Responsável Técnico / Emissor", key="orc_resp_tecnico")
+
+    st.divider()
+    st.subheader("🛠️ Escopo dos Serviços e Fornecimento")
+    st.text_area("Descreva detalhadamente o escopo técnico, equipamentos, materiais e mão de obra inclusos:", key="orc_escopo", height=150)
+
+    st.subheader("💵 Valores e Condições de Pagamento")
+    st.text_input("Valor Total (Ex: R$ 3.500,00)", key="orc_valores")
+    st.text_area("Prazo de Execução e Condições de Pagamento (Ex: 50% de entrada e 50% após conclusão; Prazo de entrega: 5 dias úteis)", key="orc_pagamento", height=80)
+
+    st.divider()
+    pdf_bytes_orc = gerar_pdf_orcamento()
+    nome_arq_orc = f"Orcamento_{st.session_state['orc_cliente'].replace(' ', '_') if st.session_state['orc_cliente'] else 'Geral'}_{datetime.now().strftime('%Y%m%d')}.pdf"
+    
+    st.download_button(
+        label="📄 GERAR, SALVAR NA PASTA DO CLIENTE E BAIXAR ORÇAMENTO PDF",
+        data=pdf_bytes_orc,
+        file_name=nome_arq_orc,
         mime="application/pdf",
         type="primary",
         use_container_width=True
@@ -620,7 +1076,6 @@ elif "🏢 Cadastro de Clientes & SDAI" in menu_admin:
                 lista_para_df.append(dados_cli)
             df_clientes_export = pd.DataFrame(lista_para_df)
             
-            # Utiliza sep=';' para abrir perfeitamente dividido em colunas no Excel em português
             csv_dados = df_clientes_export.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
             st.download_button(
                 label="📥 Baixar Planilha em Colunas (CSV / Excel)",
@@ -642,7 +1097,6 @@ elif "🏢 Cadastro de Clientes & SDAI" in menu_admin:
         if arquivo_upload_clientes is not None:
             if st.button("Confirmar e Sincronizar Base de Clientes", type="primary"):
                 try:
-                    # Tenta ler considerando separador por vírgula ou ponto e vírgula
                     try:
                         df_novo_upload = pd.read_csv(arquivo_upload_clientes, sep=';')
                         if len(df_novo_upload.columns) <= 1:
@@ -681,7 +1135,6 @@ elif "📂 Histórico & Pasta do Cliente" in menu_admin:
             nome_pasta_cliente = "".join(c for c in cliente_selecionado_hist if c.isalnum() or c in (' ', '_', '-')).strip()
             cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
             
-            # Dados cadastrais rápidos do cliente
             c_info = clientes_db[cliente_selecionado_hist]
             with st.expander("🏢 Informações Cadastrais e SDAI", expanded=False):
                 st.write(f"**CNPJ:** {c_info.get('cnpj', '')} | **Contato:** {c_info.get('contato', '')}")
@@ -707,13 +1160,13 @@ elif "📂 Histórico & Pasta do Cliente" in menu_admin:
                         tipo_item = at.get('tipo', 'Atendimento')
                         st.markdown(f"**📌 [{tipo_item}]** — *Data: {at.get('data')}*")
                         
-                        if "Relatório" in tipo_item:
-                            st.write(f"Status Geral: {at.get('status_geral')} | Resp. Técnico: {at.get('resp_tecnico')}")
+                        if "Relatório" in tipo_item or "Proposta" in tipo_item:
+                            st.write(f"Resp. Técnico: {at.get('resp_tecnico')}")
                             caminho_pdf_salvo = os.path.join(cliente_dir, at.get('arquivo_pdf', ''))
                             if os.path.exists(caminho_pdf_salvo):
                                 with open(caminho_pdf_salvo, "rb") as f_pdf_down:
                                     st.download_button(
-                                        label=f"📥 Baixar Relatório PDF Salvo ({at.get('data')})",
+                                        label=f"📥 Baixar Arquivo PDF Salvo ({at.get('data')})",
                                         data=f_pdf_down.read(),
                                         file_name=at.get('arquivo_pdf'),
                                         mime="application/pdf",
@@ -783,7 +1236,6 @@ elif "📋 Chamados" in menu_admin:
                     ch["status"] = novo_status
                     salvar_json(CHAMADOS_FILE, chamados_db)
                     
-                    # Registra a atualização também no histórico do cliente correspondente
                     registrar_historico_cliente(
                         ch['cliente'],
                         f"Chamado Técnico #{ch['id']}",
