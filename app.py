@@ -11,10 +11,9 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Eli Sistemas - Gestão, SDAI & Agenda", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Eli Sistemas - Gestão, Inspeção Técnica e Chamados", page_icon="⚡", layout="wide")
 
-# --- CONFIGURAÇÃO DE DIRETÓRIOS E ARQUIVOS ---
+# --- CONFIGURAÇÃO DE DIRETÓRIOS E BANCO DE DADOS ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in locals() else "."
 DB_FILE = os.path.join(BASE_DIR, "eli_sistemas.db")
 CLIENTES_FILE = os.path.join(BASE_DIR, "clientes.json")
@@ -24,11 +23,13 @@ USUARIOS_FILE = os.path.join(BASE_DIR, "usuarios.json")
 LOGO_PATH = os.path.join(BASE_DIR, "logo_empresa.png")
 PASTA_FOTOS_VISTORIA = os.path.join(BASE_DIR, "fotos_vistoria")
 HISTORICO_CLIENTES_DIR = os.path.join(BASE_DIR, "historico_clientes")
+BACKUP_DIR = os.path.join(BASE_DIR, "backups")
 
 os.makedirs(PASTA_FOTOS_VISTORIA, exist_ok=True)
 os.makedirs(HISTORICO_CLIENTES_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
-# --- INICIALIZAÇÃO DO BANCO DE DADOS (AGENDA E RELATÓRIOS EXPRESSOS) ---
+# --- INICIALIZAÇÃO DO BANCO SQLITE (AGENDA E RELATÓRIOS) ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -57,16 +58,14 @@ def init_db():
 init_db()
 
 def perform_backup():
-    backup_dir = os.path.join(BASE_DIR, "backups")
-    os.makedirs(backup_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = os.path.join(backup_dir, f"backup_{timestamp}.db")
+    backup_path = os.path.join(BACKUP_DIR, f"backup_{timestamp}.db")
     if os.path.exists(DB_FILE):
         shutil.copyfile(DB_FILE, backup_path)
         return backup_path
     return None
 
-# --- AUXILIARES JSON ---
+# --- CARREGAMENTO E MANIPULAÇÃO DE DADOS JSON ---
 @st.cache_data
 def carregar_json_cached(path):
     if os.path.exists(path):
@@ -112,7 +111,6 @@ def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict):
     with open(historico_path, "w", encoding="utf-8") as f_hist:
         json.dump(historico_lista, f_hist, ensure_ascii=False, indent=4)
 
-# Carregamento inicial de dados
 clientes_db = carregar_json(CLIENTES_FILE, {})
 if not isinstance(clientes_db, dict):
     clientes_db = {}
@@ -126,9 +124,10 @@ empresa_db = carregar_json(EMPRESA_FILE, {
     "endereco": "Rua Floriano Peixoto, 122 - Sala 02 - Centro",
     "resp_tecnico": "Eli Silva"
 })
+
 chamados_db = carregar_json(CHAMADOS_FILE, [])
 usuarios = carregar_json(USUARIOS_FILE, {
-    "admin": {"senha": "123", "nome": "Eli Silva", "perfil": "master"}
+    "admin": {"senha": "123", "nome": "Eli Silva", "perfil": "master", "cliente_vinculado": ""}
 })
 
 ITENS_SECOES = {
@@ -158,15 +157,16 @@ ITENS_SECOES = {
     ]
 }
 
-# --- AUTENTICAÇÃO ---
+# --- AUTENTICAÇÃO E SESSÃO ---
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["user"] = ""
     st.session_state["perfil"] = ""
+    st.session_state["cliente_vinculado"] = ""
 
 if not st.session_state["logged_in"]:
-    st.title("⚡ Eli Sistemas - Gestão, Inspeção & Agenda")
-    st.subheader("Login de Acesso")
+    st.title("⚡ Eli Sistemas - Gestão & Inspeção Técnica")
+    st.subheader("Acesso ao Sistema")
     
     with st.form("form_login"):
         u_input = st.text_input("Usuário")
@@ -178,13 +178,14 @@ if not st.session_state["logged_in"]:
                 st.session_state["logged_in"] = True
                 st.session_state["user"] = u_input
                 st.session_state["perfil"] = usuarios[u_input].get("perfil", "cliente")
+                st.session_state["cliente_vinculado"] = usuarios[u_input].get("cliente_vinculado", "")
                 st.success("Login efetuado com sucesso!")
                 st.rerun()
             else:
                 st.error("Usuário ou senha incorretos.")
     st.stop()
 
-# --- MOTORES DE PDF ---
+# --- MÉRITO GERADOR DE PDFS (REPORTLAB) ---
 def gerar_pdf_preventiva():
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -297,30 +298,6 @@ def gerar_pdf_preventiva():
     t_ass.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey), ('TOPPADDING', (0,0), (-1,-1), 6), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
     story.append(t_ass)
 
-    fotos = st.session_state.get("fotos_carregadas", [])
-    if fotos:
-        story.append(Spacer(1, 10))
-        story.append(Paragraph("<b>9. REGISTRO FOTOGRÁFICO DA VISTORIA</b>", style_sec_header))
-        story.append(Spacer(1, 4))
-        
-        linhas_fotos = []
-        par_atual = []
-        for f_path in fotos:
-            if os.path.exists(f_path):
-                img_obj = Image(f_path, width=250, height=180)
-                par_atual.append(img_obj)
-                if len(par_atual) == 2:
-                    linhas_fotos.append(par_atual)
-                    par_atual = []
-        if par_atual:
-            par_atual.append(Paragraph("", style_celula))
-            linhas_fotos.append(par_atual)
-
-        for par in linhas_fotos:
-            t_foto = Table([par], colWidths=[277, 278])
-            t_foto.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
-            story.append(t_foto)
-
     doc.build(story)
     buffer.seek(0)
     pdf_data = buffer.getvalue()
@@ -350,295 +327,139 @@ def gerar_pdf_preventiva():
 
     return pdf_data
 
-def gerar_pdf_chamado_simples():
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
-    story = []
-    styles = getSampleStyleSheet()
-    
-    style_celula = ParagraphStyle('CelTabela', parent=styles['Normal'], fontSize=8, leading=9, textColor=colors.black)
-    style_texto_empresa = ParagraphStyle('EmpresaText', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.black)
-    style_sec_header = ParagraphStyle('SecHeader', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.black)
+def inicializar_defaults():
+    defaults_vistoria = {
+        "cliente": "", "cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP",
+        "sindico": "", "zelador": "", "contato": "", "email": "",
+        "data_visita": datetime.now().strftime("%Y-%m-%d"), "tipo_visita": "Preventiva Trimestral",
+        "resp_tecnico": empresa_db.get("resp_tecnico", "Eli Silva"),
+        "acompanhante": "", "status_geral": "CONFORME / SISTEMA OPERACIONAL",
+        "central_sdai": "", "tipo_central": "SISTEMA ENDEREÇÁVEL",
+        "qtd_lacos": "", "det_fumaca": "", "acionadores": "", "avisadores": "",
+        "pressurizacao": "Sim", "tensao_baterias": "24 Vcc",
+        "parecer": "", "orientacoes": "", "fotos_carregadas": []
+    }
+    for k, v in defaults_vistoria.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-    img_logo = Image(LOGO_PATH, width=45, height=30) if os.path.exists(LOGO_PATH) else Paragraph("<b>LOGO</b>", style_celula)
+    for sec_key in ITENS_SECOES:
+        for idx, _ in enumerate(ITENS_SECOES[sec_key]):
+            if f"{sec_key}_{idx}_val" not in st.session_state:
+                st.session_state[f"{sec_key}_{idx}_val"] = ""
+            if f"{sec_key}_{idx}_obs" not in st.session_state:
+                st.session_state[f"{sec_key}_{idx}_obs"] = ""
+            if f"{sec_key}_{idx}_status" not in st.session_state:
+                st.session_state[f"{sec_key}_{idx}_status"] = "CONFORME"
 
-    info_empresa_texto = f"""
-    <b>{empresa_db.get('nome', '')}</b><br/>
-    CNPJ: {empresa_db.get('cnpj', '')} | CREA: {empresa_db.get('crea', '')} | Tel: {empresa_db.get('telefone', '')}<br/>
-    E-mail: {empresa_db.get('email', '')} | Endereço: {empresa_db.get('endereco', '')}<br/>
-    <b>RELATÓRIO TÉCNICO DE ATENDIMENTO / CHAMADO / VISTORIA SIMPLES</b>
-    """
-    
-    tabela_cabecalho = Table([[Paragraph(info_empresa_texto, style_texto_empresa), img_logo]], colWidths=[495, 60])
-    tabela_cabecalho.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('ALIGN', (1, 0), (1, 0), 'RIGHT'), ('BOTTOMPADDING', (0, 0), (-1, -1), 6)]))
-    story.append(tabela_cabecalho)
-    story.append(Spacer(1, 4))
+inicializar_defaults()
 
-    story.append(Paragraph("<b>1. DADOS DA EDIFICAÇÃO E DO ATENDIMENTO</b>", style_sec_header))
-    dados_edif = [
-        [Paragraph(f"<b>CLIENTE:</b> {st.session_state.get('cs_cliente', '')}", style_celula), Paragraph(f"<b>Data:</b> {st.session_state.get('cs_data', '')}", style_celula)],
-        [Paragraph(f"<b>CNPJ:</b> {st.session_state.get('cs_cnpj', '')}", style_celula), Paragraph(f"<b>Tipo de Atendimento:</b> {st.session_state.get('cs_tipo', '')}", style_celula)],
-        [Paragraph(f"<b>Endereço:</b> {st.session_state.get('cs_endereco', '')}", style_celula), Paragraph(f"<b>Responsável Técnico:</b> {st.session_state.get('cs_resp_tecnico', '')}", style_celula)],
-        [Paragraph(f"<b>Cidade / UF:</b> {st.session_state.get('cs_cidade_uf', '')}", style_celula), Paragraph(f"<b>Solicitante / Contato:</b> {st.session_state.get('cs_acompanhante', '')}", style_celula)],
-    ]
-    t_edif = Table(dados_edif, colWidths=[330, 225])
-    t_edif.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey), ('TOPPADDING', (0,0), (-1,-1), 2), ('BOTTOMPADDING', (0,0), (-1,-1), 2)]))
-    story.append(t_edif)
-    story.append(Spacer(1, 4))
+# --- BARRA LATERAL E NAVEGAÇÃO COMPATÍVEL ---
+st.sidebar.markdown(f"### ⚡ Eli Sistemas")
+st.sidebar.caption(f"Usuário: **{st.session_state['user']}** ({st.session_state['perfil'].upper()})")
 
-    story.append(Paragraph("<b>2. INFORMAÇÕES DO SISTEMA SDAI NO LOCAL</b>", style_sec_header))
-    dados_tec = [
-        [Paragraph(f"<b>Central SDAI:</b> {st.session_state.get('cs_central_sdai', '')}", style_celula), Paragraph(f"<b>Tipo Central:</b> {st.session_state.get('cs_tipo_central', '')}", style_celula), Paragraph(f"<b>Qtd. Laços / Zonas:</b> {st.session_state.get('cs_qtd_lacos', '')}", style_celula)],
-    ]
-    t_tec = Table(dados_tec, colWidths=[185, 185, 185])
-    t_tec.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey), ('TOPPADDING', (0,0), (-1,-1), 2), ('BOTTOMPADDING', (0,0), (-1,-1), 2)]))
-    story.append(t_tec)
-    story.append(Spacer(1, 4))
-
-    story.append(Paragraph("<b>3. DESCRIÇÃO TÉCNICA / RELATO DO ATENDIMENTO</b>", style_sec_header))
-    relato_texto = f"<b>Relatório / Escopo Executado / Ocorrência:</b><br/>{st.session_state.get('cs_relato', 'Nenhum relato informado.')}"
-    t_relato = Table([[Paragraph(relato_texto, style_celula)]], colWidths=[555])
-    t_relato.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('TOPPADDING', (0,0), (-1,-1), 6), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
-    story.append(t_relato)
-    story.append(Spacer(1, 6))
-
-    story.append(Paragraph("<b>4. VALIDAÇÃO E ASSINATURAS</b>", style_sec_header))
-    assinaturas_data = [[
-        Paragraph(f"<b>Responsável Técnico:</b> {st.session_state.get('cs_resp_tecnico', '')}<br/>CREA: {empresa_db.get('crea', '')}<br/><br/><br/>________________________________________<br/>Assinatura do Técnico", style_celula),
-        Paragraph(f"<b>Recebedor / Solicitante:</b> {st.session_state.get('cs_acompanhante', '')}<br/><br/><br/><br/>________________________________________<br/>Assinatura do Cliente", style_celula)
-    ]]
-    t_ass = Table(assinaturas_data, colWidths=[277, 278])
-    t_ass.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey), ('TOPPADDING', (0,0), (-1,-1), 6), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
-    story.append(t_ass)
-
-    fotos = st.session_state.get("cs_fotos_carregadas", [])
-    if fotos:
-        story.append(Spacer(1, 10))
-        story.append(Paragraph("<b>5. REGISTRO FOTOGRÁFICO</b>", style_sec_header))
-        story.append(Spacer(1, 4))
-        linhas_fotos = []
-        par_atual = []
-        for f_path in fotos:
-            if os.path.exists(f_path):
-                img_obj = Image(f_path, width=250, height=180)
-                par_atual.append(img_obj)
-                if len(par_atual) == 2:
-                    linhas_fotos.append(par_atual)
-                    par_atual = []
-        if par_atual:
-            par_atual.append(Paragraph("", style_celula))
-            linhas_fotos.append(par_atual)
-
-        for par in linhas_fotos:
-            t_foto = Table([par], colWidths=[277, 278])
-            t_foto.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
-            story.append(t_foto)
-
-    doc.build(story)
-    buffer.seek(0)
-    pdf_data = buffer.getvalue()
-
-    nome_cliente_atual = st.session_state.get('cs_cliente', '').strip()
-    if nome_cliente_atual:
-        nome_pasta_cliente = "".join(c for c in nome_cliente_atual if c.isalnum() or c in (' ', '_', '-')).strip()
-        cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
-        os.makedirs(cliente_dir, exist_ok=True)
-        data_hora_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-        nome_arq_pdf = f"Vistoria_Chamado_{data_hora_str}.pdf"
-        caminho_completo_pdf = os.path.join(cliente_dir, nome_arq_pdf)
-        
-        with open(caminho_completo_pdf, "wb") as f_pdf:
-            f_pdf.write(pdf_data)
-            
-        registrar_historico_cliente(
-            nome_cliente_atual,
-            "Relatório de Vistoria/Chamado Simples",
-            {
-                "arquivo_pdf": nome_arq_pdf,
-                "resp_tecnico": st.session_state.get('cs_resp_tecnico', '')
-            }
-        )
-
-    return pdf_data
-
-def gerar_pdf_orcamento():
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
-    story = []
-    styles = getSampleStyleSheet()
-    
-    style_celula = ParagraphStyle('CelTabela', parent=styles['Normal'], fontSize=8, leading=9, textColor=colors.black)
-    style_texto_empresa = ParagraphStyle('EmpresaText', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.black)
-    style_sec_header = ParagraphStyle('SecHeader', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.black)
-
-    img_logo = Image(LOGO_PATH, width=45, height=30) if os.path.exists(LOGO_PATH) else Paragraph("<b>LOGO</b>", style_celula)
-
-    info_empresa_texto = f"""
-    <b>{empresa_db.get('nome', '')}</b><br/>
-    CNPJ: {empresa_db.get('cnpj', '')} | CREA: {empresa_db.get('crea', '')} | Tel: {empresa_db.get('telefone', '')}<br/>
-    E-mail: {empresa_db.get('email', '')} | Endereço: {empresa_db.get('endereco', '')}<br/>
-    <b>PROPOSTA COMERCIAL / ORÇAMENTO DE SERVIÇOS & MATERIAIS</b>
-    """
-    
-    tabela_cabecalho = Table([[Paragraph(info_empresa_texto, style_texto_empresa), img_logo]], colWidths=[495, 60])
-    tabela_cabecalho.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('ALIGN', (1, 0), (1, 0), 'RIGHT'), ('BOTTOMPADDING', (0, 0), (-1, -1), 6)]))
-    story.append(tabela_cabecalho)
-    story.append(Spacer(1, 4))
-
-    story.append(Paragraph("<b>1. DADOS DO CLIENTE</b>", style_sec_header))
-    dados_edif = [
-        [Paragraph(f"<b>CLIENTE:</b> {st.session_state.get('orc_cliente', '')}", style_celula), Paragraph(f"<b>Data da Proposta:</b> {st.session_state.get('orc_data', '')}", style_celula)],
-        [Paragraph(f"<b>CNPJ:</b> {st.session_state.get('orc_cnpj', '')}", style_celula), Paragraph(f"<b>Validade da Proposta:</b> {st.session_state.get('orc_validade', '')}", style_celula)],
-        [Paragraph(f"<b>Endereço:</b> {st.session_state.get('orc_endereco', '')}", style_celula), Paragraph(f"<b>Responsável Técnico:</b> {st.session_state.get('orc_resp_tecnico', '')}", style_celula)],
-        [Paragraph(f"<b>Contato / E-mail:</b> {st.session_state.get('orc_contato', '')} | {st.session_state.get('orc_email', '')}", style_celula), Paragraph("", style_celula)],
-    ]
-    t_edif = Table(dados_edif, colWidths=[330, 225])
-    t_edif.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey), ('TOPPADDING', (0,0), (-1,-1), 2), ('BOTTOMPADDING', (0,0), (-1,-1), 2)]))
-    story.append(t_edif)
-    story.append(Spacer(1, 4))
-
-    story.append(Paragraph("<b>2. ESCOPO DOS SERVIÇOS / FORNECIMENTO</b>", style_sec_header))
-    escopo_texto = f"<b>Descrição Detalhada do Escopo:</b><br/>{st.session_state.get('orc_escopo', 'Nenhum escopo detalhado.')}"
-    t_escopo = Table([[Paragraph(escopo_texto, style_celula)]], colWidths=[555])
-    t_escopo.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('TOPPADDING', (0,0), (-1,-1), 6), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
-    story.append(t_escopo)
-    story.append(Spacer(1, 4))
-
-    story.append(Paragraph("<b>3. VALOR TOTAL E CONDIÇÕES DE PAGAMENTO</b>", style_sec_header))
-    valores_texto = f"""
-    <b>Valor Total do Orçamento:</b> {st.session_state.get('orc_valores', '')}<br/>
-    <b>Condições de Pagamento e Prazo:</b> {st.session_state.get('orc_pagamento', '')}
-    """
-    t_val = Table([[Paragraph(valores_texto, style_celula)]], colWidths=[555])
-    t_val.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('TOPPADDING', (0,0), (-1,-1), 6), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
-    story.append(t_val)
-    story.append(Spacer(1, 6))
-
-    story.append(Paragraph("<b>4. VALIDAÇÃO COMERCIAL</b>", style_sec_header))
-    assinaturas_data = [[
-        Paragraph(f"<b>Prestador:</b> {st.session_state.get('orc_resp_tecnico', '')}<br/>CNPJ: {empresa_db.get('cnpj', '')}<br/><br/><br/>________________________________________<br/>Assinatura / Emissor", style_celula),
-        Paragraph(f"<b>De Acordo (Cliente):</b> {st.session_state.get('orc_cliente', '')}<br/><br/><br/><br/>________________________________________<br/>Aprovação do Cliente", style_celula)
-    ]]
-    t_ass = Table(assinaturas_data, colWidths=[277, 278])
-    t_ass.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey), ('TOPPADDING', (0,0), (-1,-1), 6), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
-    story.append(t_ass)
-
-    doc.build(story)
-    buffer.seek(0)
-    pdf_data = buffer.getvalue()
-
-    nome_cliente_atual = st.session_state.get('orc_cliente', '').strip()
-    if nome_cliente_atual:
-        nome_pasta_cliente = "".join(c for c in nome_cliente_atual if c.isalnum() or c in (' ', '_', '-')).strip()
-        cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
-        os.makedirs(cliente_dir, exist_ok=True)
-        data_hora_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-        nome_arq_pdf = f"Orcamento_{data_hora_str}.pdf"
-        caminho_completo_pdf = os.path.join(cliente_dir, nome_arq_pdf)
-        
-        with open(caminho_completo_pdf, "wb") as f_pdf:
-            f_pdf.write(pdf_data)
-            
-        registrar_historico_cliente(
-            nome_cliente_atual,
-            "Proposta Comercial / Orçamento",
-            {
-                "arquivo_pdf": nome_arq_pdf,
-                "valor": st.session_state.get('orc_valores', ''),
-                "resp_tecnico": st.session_state.get('orc_resp_tecnico', '')
-            }
-        )
-
-    return pdf_data
-
-# --- INICIALIZAÇÃO DOS ESTADOS PADRÃO ---
-defaults_vistoria = {
-    "cliente": "", "cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP",
-    "sindico": "", "zelador": "", "contato": "", "email": "",
-    "data_visita": datetime.now().strftime("%Y-%m-%d"),
-    "tipo_visita": "Preventiva Trimestral",
-    "resp_tecnico": empresa_db.get("resp_tecnico", "Eli Silva"),
-    "acompanhante": "", "status_geral": "CONFORME / SISTEMA OPERACIONAL",
-    "central_sdai": "", "tipo_central": "SISTEMA ENDEREÇÁVEL",
-    "qtd_lacos": "", "det_fumaca": "", "acionadores": "", "avisadores": "",
-    "pressurizacao": "Sim", "tensao_baterias": "24 Vcc",
-    "parecer": "", "orientacoes": "", "fotos_carregadas": []
-}
-
-for k, v in defaults_vistoria.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
-
-defaults_chamado_simples = {
-    "cs_cliente": "", "cs_cnpj": "", "cs_endereco": "", "cs_cidade_uf": "Ribeirão Preto - SP",
-    "cs_acompanhante": "", "cs_data": datetime.now().strftime("%Y-%m-%d"),
-    "cs_tipo": "Atendimento Corretivo / Chamado Técnico",
-    "cs_resp_tecnico": empresa_db.get("resp_tecnico", "Eli Silva"),
-    "cs_central_sdai": "", "cs_tipo_central": "SISTEMA ENDEREÇÁVEL", "cs_qtd_lacos": "",
-    "cs_relato": "", "cs_fotos_carregadas": []
-}
-
-for k, v in defaults_chamado_simples.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
-
-defaults_orcamento = {
-    "orc_cliente": "", "orc_cnpj": "", "orc_endereco": "", "orc_contato": "", "orc_email": "",
-    "orc_data": datetime.now().strftime("%Y-%m-%d"), "orc_validade": "10 Dias",
-    "orc_resp_tecnico": empresa_db.get("resp_tecnico", "Eli Silva"),
-    "orc_escopo": "", "orc_valores": "", "orc_pagamento": ""
-}
-
-for k, v in defaults_orcamento.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
-
-for sec_key in ITENS_SECOES:
-    for idx, _ in enumerate(ITENS_SECOES[sec_key]):
-        if f"{sec_key}_{idx}_val" not in st.session_state:
-            st.session_state[f"{sec_key}_{idx}_val"] = ""
-        if f"{sec_key}_{idx}_obs" not in st.session_state:
-            st.session_state[f"{sec_key}_{idx}_obs"] = ""
-        if f"{sec_key}_{idx}_status" not in st.session_state:
-            st.session_state[f"{sec_key}_{idx}_status"] = "CONFORME"
-
-# --- MENU LATERAL INTEGRADO ---
-st.sidebar.title(f"⚡ Eli Sistemas")
-st.sidebar.caption(f"Usuário: {st.session_state['user']}")
 if st.sidebar.button("🚪 Sair / Logout"):
     st.session_state["logged_in"] = False
     st.rerun()
 
 st.sidebar.divider()
-menu_admin = st.sidebar.radio(
-    "Navegação do Sistema",
-    [
-        "📅 Agenda Principal",
-        "📋 Vistoria & Relatório Técnico (PDF)",
-        "🛠️ Vistoria Simples / Chamado (PDF)",
-        "📄 Relatórios Expressos (HTML)",
-        "💰 Orçamento Comercial",
-        "🏢 Cadastro de Clientes & SDAI",
-        "📂 Histórico & Pasta do Cliente",
-        "📋 Gestão de Chamados",
-        "💾 Backup Diário",
-        "🏢 Dados da Minha Empresa",
-        "👥 Gerenciar Usuários"
-    ]
-)
 
-# 1. AGENDA PRINCIPAL (Do App 2)
-if menu_admin == "📅 Agenda Principal":
-    st.title("📅 Agenda de Atividades")
-    st.write("Gerencie suas tarefas diárias, semanais e mensais com controle de status.")
+# DEFINIÇÃO DO MENU DE ACORDO COM O PERFIL
+if st.session_state["perfil"] == "cliente":
+    menu_opcoes = ["📞 Abertura e Acompanhamento de Chamados"]
+else:
+    menu_opcoes = [
+        "📅 Agenda Principal",
+        "📋 Vistoria & Relatório Técnico NBR 17240",
+        "🏢 Cadastro de Clientes & SDAI",
+        "📞 Gestão de Chamados",
+        "📂 Histórico & Pasta do Cliente",
+        "🏢 Dados da Minha Empresa",
+        "👥 Gerenciar Usuários",
+        "💾 Backup Diário"
+    ]
+
+menu = st.sidebar.selectbox("Navegação", menu_opcoes)
+
+# ==============================================================================
+# PERFIL CLIENTE: TELA EXCLUSIVA DE CHAMADOS
+# ==============================================================================
+if menu == "📞 Abertura e Acompanhamento de Chamados":
+    st.header("📞 Central de Chamados Técnicos")
+    cliente_nome_usuario = st.session_state.get("cliente_vinculado", "")
     
+    if not cliente_nome_usuario:
+        st.warning("Seu usuário não possui um condomínio/cliente vinculado. Entre em contato com a Eli Sistemas.")
+    else:
+        st.subheader(f"Cliente: {cliente_nome_usuario}")
+        tab_ch1, tab_ch2 = st.tabs(["➕ Abrir Novo Chamado", "📋 Acompanhar Meus Chamados"])
+        
+        with tab_ch1:
+            with st.form("form_abrir_chamado_cliente", clear_on_submit=True):
+                solicitante = st.text_input("Nome do Solicitante / Responsável", value=st.session_state["user"])
+                contato_tel = st.text_input("Telefone de Contato / WhatsApp")
+                email_contato = st.text_input("E-mail para Acompanhamento")
+                descricao_prob = st.text_area("Descreva o Problema / Ocorrência no Sistema de Alarme")
+                foto_chamado = st.file_uploader("Anexar Imagem/Foto da Falha (Opcional)", type=["png", "jpg", "jpeg"])
+                
+                if st.form_submit_button("🚀 Abrir Chamado Técnico"):
+                    if descricao_prob:
+                        novo_id = len(chamados_db) + 1
+                        caminho_foto = ""
+                        if foto_chamado:
+                            caminho_foto = os.path.join(PASTA_FOTOS_VISTORIA, f"chamado_{novo_id}_{foto_chamado.name}")
+                            with open(caminho_foto, "wb") as f:
+                                f.write(foto_chamado.getbuffer())
+                                
+                        novo_chamado = {
+                            "id": novo_id,
+                            "cliente": cliente_nome_usuario,
+                            "solicitante": solicitante,
+                            "contato": contato_tel,
+                            "email": email_contato,
+                            "problema": descricao_prob,
+                            "anexo": caminho_foto,
+                            "status": "Pendente",
+                            "data_abertura": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                        chamados_db.append(novo_chamado)
+                        salvar_json(CHAMADOS_FILE, chamados_db)
+                        
+                        registrar_historico_cliente(
+                            cliente_nome_usuario,
+                            f"Abertura de Chamado #{novo_id}",
+                            {"problema": descricao_prob, "status": "Pendente", "solicitante": solicitante}
+                        )
+                        st.success(f"✅ Chamado #{novo_id} aberto com sucesso! A equipe técnica retornará em breve.")
+                        st.rerun()
+                    else:
+                        st.error("A descrição do problema é obrigatória.")
+
+        with tab_ch2:
+            st.subheader("Meus Chamados")
+            meus_chamados = [c for c in chamados_db if c.get("cliente") == cliente_nome_usuario]
+            if not meus_chamados:
+                st.info("Nenhum chamado aberto até o momento.")
+            else:
+                for ch in reversed(meus_chamados):
+                    with st.expander(f"Chamado #{ch['id']} - Data: {ch.get('data_abertura', 'N/A')} (Status: {ch['status']})"):
+                        st.write(f"**Solicitante:** {ch.get('solicitante', 'N/A')} | **Contato:** {ch.get('contato', 'N/A')}")
+                        st.write(f"**Descrição da Ocorrência:** {ch['problema']}")
+                        if ch.get("anexo") and os.path.exists(ch["anexo"]):
+                            st.image(ch["anexo"], width=300)
+
+# ==============================================================================
+# PERFIL MASTER (ADMINISTRADOR)
+# ==============================================================================
+elif menu == "📅 Agenda Principal":
+    st.title("📅 Agenda de Atividades e Manutenções")
     with st.form("new_task_form", clear_on_submit=True):
         st.subheader("Cadastrar Nova Tarefa")
         col1, col2, col3 = st.columns(3)
         with col1:
             task_name = st.text_input("Descrição da Tarefa / Serviço")
         with col2:
-            category = st.selectbox("Período / Categoria", ["Diária", "Semanal", "Mensal"])
+            category = st.selectbox("Período / Categoria", ["Diária", "Semanal", "Mensal", "Trimestral", "Anual"])
         with col3:
             due_date = st.date_input("Data Alvo", value=datetime.today())
             
@@ -654,21 +475,15 @@ if menu_admin == "📅 Agenda Principal":
             st.rerun()
 
     st.divider()
-    st.subheader("Gerenciamento de Tarefas")
-    
     conn = sqlite3.connect(DB_FILE)
     df_agenda = pd.read_sql("SELECT * FROM agenda ORDER BY due_date ASC", conn)
     conn.close()
     
     if not df_agenda.empty:
-        filter_cat = st.selectbox("Filtrar por Período", ["Todas", "Diária", "Semanal", "Mensal"])
-        if filter_cat != "Todas":
-            df_agenda = df_agenda[df_agenda["category"] == filter_cat]
-            
         for index, row in df_agenda.iterrows():
             cols = st.columns([3, 1, 1, 1])
             with cols[0]:
-                st.markdown(f"**{row['task']}**<br><small style='color:gray;'>Período: {row['category']} | Data: {row['due_date']}</small>", unsafe_allow_html=True)
+                st.markdown(f"**{row['task']}**<br><small>Período: {row['category']} | Data: {row['due_date']}</small>", unsafe_allow_html=True)
             with cols[1]:
                 status_color = "green" if row['status'] == "Realizado" else "orange"
                 st.markdown(f"<span style='color:{status_color}; font-weight:bold;'>● {row['status']}</span>", unsafe_allow_html=True)
@@ -682,7 +497,6 @@ if menu_admin == "📅 Agenda Principal":
                     conn.close()
                     st.rerun()
             with cols[3]:
-                st.write("")
                 if st.button("Excluir", key=f"del_{row['id']}"):
                     conn = sqlite3.connect(DB_FILE)
                     cursor = conn.cursor()
@@ -690,41 +504,10 @@ if menu_admin == "📅 Agenda Principal":
                     conn.commit()
                     conn.close()
                     st.rerun()
-    else:
-        st.info("Nenhuma tarefa cadastrada no momento.")
 
-# 2. VISTORIA & RELATÓRIO TÉCNICO COMPLETO NBR (Do App 3)
-elif menu_admin == "📋 Vistoria & Relatório Técnico (PDF)":
+elif menu == "📋 Vistoria & Relatório Técnico NBR 17240":
     st.header("📋 Inspeção Preventiva & Relatório NBR 17240")
-
-    def processar_upload_rascunho():
-        arquivo = st.session_state.get("uploader_rascunho")
-        if arquivo is not None:
-            try:
-                rascunho_carregado = json.load(arquivo)
-                for k, v in rascunho_carregado.items():
-                    st.session_state[k] = v
-                st.session_state["_sucesso_rascunho"] = True
-            except Exception as e:
-                st.session_state["_erro_rascunho"] = str(e)
-
-    with st.expander("💾 Salvar / Carregar Rascunho do Relatório", expanded=True):
-        col_rasc1, col_rasc2 = st.columns(2)
-        with col_rasc1:
-            st.write("**Exportar Rascunho Atual**")
-            dados_rascunho = {k: v for k, v in st.session_state.items() if k not in ["logged_in", "user", "perfil"] and not k.startswith("uploader_") and not k.startswith("_")}
-            json_str = json.dumps(dados_rascunho, ensure_ascii=False, indent=4)
-            st.download_button("📥 Baixar Arquivo de Rascunho (.json)", data=json_str, file_name=f"rascunho_vistoria_{datetime.now().strftime('%Y%m%d_%H%M')}.json", mime="application/json", use_container_width=True)
-        with col_rasc2:
-            st.write("**Importar Rascunho Salvo**")
-            st.file_uploader("Enviar arquivo .json salvo anteriormente", type=["json"], key="uploader_rascunho", on_change=processar_upload_rascunho)
-            if st.session_state.get("_sucesso_rascunho"):
-                st.success("✅ Rascunho carregado e campos recuperados com sucesso!")
-                st.session_state["_sucesso_rascunho"] = False
-
-    st.divider()
     if clientes_db:
-        st.subheader("📁 Carregar Cliente Cadastrado")
         lista_clientes_nomes = ["-- Selecione --"] + list(clientes_db.keys())
         def ao_selecionar_cliente():
             cli_nome = st.session_state["select_carregar_cliente"]
@@ -749,367 +532,147 @@ elif menu_admin == "📋 Vistoria & Relatório Técnico (PDF)":
 
         st.selectbox("Selecione o Cliente", lista_clientes_nomes, key="select_carregar_cliente", on_change=ao_selecionar_cliente)
 
-    st.divider()
-    st.subheader("📝 Edição dos Dados Gerais da Visita")
     col1, col2 = st.columns(2)
     with col1:
         st.text_input("Cliente / Condomínio", key="cliente")
         st.text_input("CNPJ do Cliente", key="cnpj")
         st.text_input("Endereço", key="endereco")
         st.text_input("Cidade / UF", key="cidade_uf")
-        st.text_input("Síndico", key="sindico")
-        st.text_input("Zelador", key="zelador")
     with col2:
-        st.text_input("Contato / Tel", key="contato")
-        st.text_input("E-mail", key="email")
-        st.text_input("Data da Visita (AAAA-MM-DD ou DD/MM/AAAA)", key="data_visita")
+        st.text_input("Data da Visita", key="data_visita")
         st.text_input("Tipo de Visita", key="tipo_visita")
         st.text_input("Responsável Técnico", key="resp_tecnico")
         st.text_input("Acompanhante / Portaria", key="acompanhante")
 
-    st.selectbox("Status Geral / Parecer", ["CONFORME / SISTEMA OPERACIONAL", "CONFORME COM RESSALVAS", "NÃO CONFORME / INTERLIGADO COM FALHAS"], key="status_geral")
-
-    st.divider()
-    st.subheader("⚙️ Características Técnicas do Sistema")
-    col_t1, col_t2, col_t3 = st.columns(3)
-    with col_t1:
-        st.text_input("Central SDAI", key="central_sdai")
-        st.text_input("Tipo Central", key="tipo_central")
-    with col_t2:
-        st.text_input("Qtd. Laços / Zonas", key="qtd_lacos")
-        st.text_input("Detectores Fumaça/Térmicos", key="det_fumaca")
-    with col_t3:
-        st.text_input("Acionadores Manuais", key="acionadores")
-        st.text_input("Avisadores Sonoros/Visuais", key="avisadores")
-
-    col_t4, col_t5 = st.columns(2)
-    with col_t4:
-        st.text_input("Pressurização Escada (IT 13)", key="pressurizacao")
-    with col_t5:
-        st.text_input("Tensão & Baterias Nominais", key="tensao_baterias")
-
-    st.divider()
     st.subheader("🔍 Verificação dos Itens Normativos (Checklist)")
-    sec_nomes = {
-        "sec3": "3. Verificação Física e Elétrica da Central e Fontes",
-        "sec4": "4. Integridade das Linhas de Sinal (Laços)",
-        "sec5": "5. Ensaios Funcionais & Amostragem de Periféricos",
-        "sec6": "6. Pressurização de Escadas de Segurança (IT 13)"
-    }
-
-    for sec_key, sec_title in sec_nomes.items():
-        with st.expander(sec_title, expanded=False):
+    for sec_key, sec_title in [("sec3", "3. Central & Fontes"), ("sec4", "4. Laços"), ("sec5", "5. Periféricos"), ("sec6", "6. Pressurização/IT13")]:
+        with st.expander(sec_title):
             for idx, item in enumerate(ITENS_SECOES[sec_key]):
-                st.markdown(f"**{item[0]}** — *Ref: {item[1]}*")
                 col_i1, col_i2, col_i3 = st.columns([1.5, 3, 1])
                 with col_i1:
-                    st.text_input(f"Valor Medido ({item[0]})", key=f"{sec_key}_{idx}_val")
+                    st.text_input(f"Valor ({item[0]})", key=f"{sec_key}_{idx}_val")
                 with col_i2:
-                    st.text_input(f"Observação ({item[0]})", key=f"{sec_key}_{idx}_obs")
+                    st.text_input(f"Obs ({item[0]})", key=f"{sec_key}_{idx}_obs")
                 with col_i3:
                     st.selectbox(f"Status ({item[0]})", ["CONFORME", "NÃO CONFORME", "N/A"], key=f"{sec_key}_{idx}_status")
-                st.divider()
 
-    st.subheader("📋 Conclusão e Orientações")
-    st.text_area("Conclusão Técnica / Parecer", key="parecer", height=80)
-    st.text_area("Orientações Operacionais", key="orientacoes", height=80)
-
-    st.subheader("📸 Relatório Fotográfico Complementar")
-    uploaded_fotos = st.file_uploader("Enviar Fotos da Vistoria", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="uploader_fotos")
-    if uploaded_fotos:
-        for foto in uploaded_fotos:
-            f_path = os.path.join(PASTA_FOTOS_VISTORIA, foto.name)
-            with open(f_path, "wb") as f:
-                f.write(foto.getbuffer())
-            if f_path not in st.session_state["fotos_carregadas"]:
-                st.session_state["fotos_carregadas"].append(f_path)
-        st.success("✅ Fotos carregadas com sucesso!")
-
-    st.divider()
     pdf_bytes = gerar_pdf_preventiva()
-    nome_arquivo_pdf = f"Relatorio_SDAI_{st.session_state['cliente'].replace(' ', '_') if st.session_state['cliente'] else 'Geral'}_{datetime.now().strftime('%Y%m%d')}.pdf"
-    
-    st.download_button(label="📄 GERAR, SALVAR NA PASTA E BAIXAR RELATÓRIO PDF", data=pdf_bytes, file_name=nome_arquivo_pdf, mime="application/pdf", type="primary", use_container_width=True)
+    st.download_button("📄 GERAR E BAIXAR RELATÓRIO PDF", data=pdf_bytes, file_name="Relatorio_Vistoria.pdf", mime="application/pdf", type="primary")
 
-# 3. VISTORIA SIMPLES / CHAMADO PDF (Do App 3)
-elif menu_admin == "🛠️ Vistoria Simples / Chamado (PDF)":
-    st.header("🛠️ Relatório Simples de Vistoria / Chamado Técnico (PDF)")
-    
-    if clientes_db:
-        st.subheader("📁 Puxar Dados de Cliente Cadastrado")
-        lista_clientes_nomes_cs = ["-- Selecione --"] + list(clientes_db.keys())
-        def ao_selecionar_cliente_cs():
-            cli_nome = st.session_state["select_carregar_cliente_cs"]
-            if cli_nome != "-- Selecione --" and cli_nome in clientes_db:
-                c_info = clientes_db[cli_nome]
-                st.session_state["cs_cliente"] = c_info.get("nome", "")
-                st.session_state["cs_cnpj"] = c_info.get("cnpj", "")
-                st.session_state["cs_endereco"] = c_info.get("endereco", "")
-                st.session_state["cs_cidade_uf"] = c_info.get("cidade_uf", "")
-                st.session_state["cs_central_sdai"] = c_info.get("central_sdai", "")
-                st.session_state["cs_tipo_central"] = c_info.get("tipo_central", "")
-                st.session_state["cs_qtd_lacos"] = c_info.get("qtd_lacos", "")
-        st.selectbox("Selecione o Cliente", lista_clientes_nomes_cs, key="select_carregar_cliente_cs", on_change=ao_selecionar_cliente_cs)
-
-    st.divider()
-    col_cs1, col_cs2 = st.columns(2)
-    with col_cs1:
-        st.text_input("Cliente / Empresa", key="cs_cliente")
-        st.text_input("CNPJ", key="cs_cnpj")
-        st.text_input("Endereço", key="cs_endereco")
-        st.text_input("Cidade / UF", key="cs_cidade_uf")
-    with col_cs2:
-        st.text_input("Solicitante / Contato no Local", key="cs_acompanhante")
-        st.text_input("Data do Atendimento", key="cs_data")
-        st.text_input("Tipo de Atendimento", key="cs_tipo")
-        st.text_input("Responsável Técnico", key="cs_resp_tecnico")
-
-    st.text_area("Descreva detalhadamente a vistoria ou chamado:", key="cs_relato", height=150)
-    pdf_bytes_cs = gerar_pdf_chamado_simples()
-    st.download_button("📄 GERAR E BAIXAR PDF DO ATENDIMENTO", data=pdf_bytes_cs, file_name=f"Chamado_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf", type="primary", use_container_width=True)
-
-# 4. RELATÓRIOS EXPRESSOS HTML (Do App 2)
-elif menu_admin == "📄 Relatórios Expressos (HTML)":
-    st.title("📄 Emissão Rápida de Relatórios e Vistorias em HTML")
-    
-    LOGO_HTML = f'''
-    <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #b71c1c; padding-bottom: 10px; margin-bottom: 20px;">
-        <div>
-            <h2 style="color: #b71c1c; margin: 0; font-size: 20px;">{empresa_db.get("nome", "ELI SISTEMAS")}</h2>
-            <p style="margin: 0; font-size: 11px; color: #555;">Sistemas de Alarme, Detecção e Segurança contra Incêndio</p>
-        </div>
-        <div style="text-align: right; font-size: 11px; color: #666;">
-            <b>Relatório Técnico Oficial</b><br>
-            Emissão: {datetime.now().strftime("%d/%m/%Y %H:%M")}
-        </div>
-    </div>
-    '''
-    
-    with st.form("report_form", clear_on_submit=True):
-        st.subheader("Novo Relatório Rápido")
-        rep_title = st.text_input("Título do Relatório")
-        client = st.text_input("Cliente / Local da Obra")
-        rep_type = st.selectbox("Tipo de Documento", ["Vistoria Técnica", "Manutenção Preventiva", "Auditoria de Sinalização"])
-        content = st.text_area("Descrição Técnica, Equipamentos e Conclusão")
+elif menu == "🏢 Cadastro de Clientes & SDAI":
+    st.header("🏢 Cadastro de Clientes e Equipamentos")
+    with st.form("form_cad_cliente"):
+        c_nome_cad = st.text_input("Nome do Condomínio / Empresa")
+        c_cnpj_cad = st.text_input("CNPJ")
+        c_end_cad = st.text_input("Endereço")
+        c_cid_cad = st.text_input("Cidade / UF", value="Ribeirão Preto - SP")
+        c_tel_cad = st.text_input("Telefone")
+        c_email_cad = st.text_input("E-mail")
         
-        gen_btn = st.form_submit_button("Salvar no Banco e Gerar HTML")
-        if gen_btn and rep_title:
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO reports (title, client, date, content, type) VALUES (?, ?, ?, ?, ?)",
-                           (rep_title, client, datetime.now().strftime("%d/%m/%Y %H:%M"), content, rep_type))
-            conn.commit()
-            conn.close()
-            st.success("Relatório salvo no banco de dados!")
-
-    st.divider()
-    st.subheader("Histórico de Relatórios em HTML")
-    conn = sqlite3.connect(DB_FILE)
-    df_reports = pd.read_sql("SELECT * FROM reports ORDER BY id DESC", conn)
-    conn.close()
-    
-    if not df_reports.empty:
-        for idx, row in df_reports.iterrows():
-            with st.expander(f"[{row['type']}] {row['title']} - Cliente: {row['client']} ({row['date']})"):
-                preview_html = f'''
-                <div style="border: 1px solid #ccc; padding: 25px; border-radius: 8px; background: white; color: black; font-family: Arial, sans-serif;">
-                    {LOGO_HTML}
-                    <h3 style="color: #222; margin-bottom: 5px;">{row['title']}</h3>
-                    <p style="margin: 4px 0;"><b>Cliente / Local:</b> {row['client']}</p>
-                    <p style="margin: 4px 0;"><b>Data de Emissão:</b> {row['date']}</p>
-                    <hr style="border:0; border-top:1px solid #ddd; margin: 15px 0;">
-                    <p style="margin: 4px 0;"><b>Tipo de Serviço:</b> {row['type']}</p>
-                    <p style="white-space: pre-wrap; margin-top: 15px;">{row['content']}</p>
-                    <br><br>
-                    <div style="display: flex; justify-content: space-between; margin-top: 50px; font-size: 12px; color: #333;">
-                        <div style="text-align: center;">____________________________________________<br>Eli Sistemas<br>Responsável Técnico</div>
-                        <div style="text-align: center;">____________________________________________<br>Assinatura do Cliente / Contratante</div>
-                    </div>
-                </div>
-                '''
-                st.markdown(preview_html, unsafe_allow_html=True)
-                st.download_button("📥 Baixar Relatório (HTML)", data=preview_html, file_name=f"relatorio_{row['id']}.html", mime="text/html", key=f"dl_html_{row['id']}")
-
-# 5. ORÇAMENTO COMERCIAL (Do App 3)
-elif menu_admin == "💰 Orçamento Comercial":
-    st.header("💰 Elaboração de Orçamento Comercial")
-    if clientes_db:
-        lista_clientes_nomes_orc = ["-- Selecione --"] + list(clientes_db.keys())
-        def ao_selecionar_cliente_orc():
-            cli_nome = st.session_state["select_carregar_cliente_orc"]
-            if cli_nome != "-- Selecione --" and cli_nome in clientes_db:
-                c_info = clientes_db[cli_nome]
-                st.session_state["orc_cliente"] = c_info.get("nome", "")
-                st.session_state["orc_cnpj"] = c_info.get("cnpj", "")
-                st.session_state["orc_endereco"] = f"{c_info.get('endereco', '')} - {c_info.get('cidade_uf', '')}"
-                st.session_state["orc_contato"] = c_info.get("contato", "")
-                st.session_state["orc_email"] = c_info.get("email", "")
-        st.selectbox("Selecione o Cliente", lista_clientes_nomes_orc, key="select_carregar_cliente_orc", on_change=ao_selecionar_cliente_orc)
-
-    st.divider()
-    col_orc1, col_orc2 = st.columns(2)
-    with col_orc1:
-        st.text_input("Cliente / Condomínio", key="orc_cliente")
-        st.text_input("CNPJ", key="orc_cnpj")
-        st.text_input("Endereço Completo", key="orc_endereco")
-    with col_orc2:
-        st.text_input("Telefone de Contato", key="orc_contato")
-        st.text_input("E-mail", key="orc_email")
-        st.text_input("Data da Proposta", key="orc_data")
-        st.text_input("Validade da Proposta", key="orc_validade")
-        st.text_input("Responsável Técnico / Emissor", key="orc_resp_tecnico")
-
-    st.text_area("Descreva detalhadamente o escopo técnico, equipamentos, materiais e mão de obra:", key="orc_escopo", height=150)
-    st.text_input("Valor Total (Ex: R$ 3.500,00)", key="orc_valores")
-    st.text_area("Prazo de Execução e Condições de Pagamento", key="orc_pagamento", height=80)
-
-    pdf_bytes_orc = gerar_pdf_orcamento()
-    st.download_button("📄 GERAR E BAIXAR ORÇAMENTO PDF", data=pdf_bytes_orc, file_name=f"Orcamento_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf", type="primary", use_container_width=True)
-
-# 6. CADASTRO DE CLIENTES & SDAI (Do App 3)
-elif menu_admin == "🏢 Cadastro de Clientes & SDAI":
-    st.header("🏢 Gestão de Clientes e Equipamentos SDAI")
-    tab_c1, tab_c2, tab_c3 = st.tabs(["➕ Adicionar / Editar Cliente", "📋 Lista de Clientes", "📊 Importar / Exportar Planilha"])
-
-    with tab_c1:
-        with st.form("form_cad_cliente"):
-            c_nome_cad = st.text_input("Nome do Condomínio / Empresa")
-            c_cnpj_cad = st.text_input("CNPJ")
-            c_end_cad = st.text_input("Endereço")
-            c_cid_cad = st.text_input("Cidade / UF", value="Ribeirão Preto - SP")
-            c_sind_cad = st.text_input("Síndico / Administração")
-            c_zel_cad = st.text_input("Zelador")
-            c_tel_cad = st.text_input("Telefone de Contato")
-            c_email_cad = st.text_input("E-mail")
-            c_csdai = st.text_input("Central SDAI (Modelo/Marca)")
-            c_tsdai = st.text_input("Tipo de Central", value="SISTEMA ENDEREÇÁVEL")
-            c_qlacos = st.text_input("Qtd. Laços / Zonas", value="01 LAÇO")
-            c_dfum = st.text_input("Detectores de Fumaça / Térmicos", value="0 UN")
-            c_acion = st.text_input("Acionadores Manuais", value="0 un")
-            c_avis = st.text_input("Avisadores Sonoros/Visuais", value="0 un")
-            c_press = st.text_input("Pressurização Escada", value="Sim (IT 13)")
-            c_bat = st.text_input("Tensão & Baterias Nominais", value="220 Vac nominal | Baterias 24 Vcc")
-
-            if st.form_submit_button("💾 Salvar Cliente no Sistema"):
-                if c_nome_cad:
-                    clientes_db[c_nome_cad] = {
-                        "nome": c_nome_cad, "cnpj": c_cnpj_cad, "endereco": c_end_cad,
-                        "cidade_uf": c_cid_cad, "sindico": c_sind_cad, "zelador": c_zel_cad,
-                        "contato": c_tel_cad, "email": c_email_cad, "central_sdai": c_csdai,
-                        "tipo_central": c_tsdai, "qtd_lacos": c_qlacos, "det_fumaca": c_dfum,
-                        "acionadores": c_acion, "avisadores": c_avis, "pressurizacao": c_press,
-                        "tensao_baterias": c_bat,
-                    }
-                    salvar_json(CLIENTES_FILE, clientes_db)
-                    st.success(f"✅ Cliente {c_nome_cad} salvo com sucesso!")
-
-    with tab_c2:
-        for cl_nome, cl_data in list(clientes_db.items()):
-            with st.expander(f"🏢 {cl_nome} (CNPJ: {cl_data.get('cnpj', '')})"):
-                st.write(f"**Endereço:** {cl_data.get('endereco', '')} - {cl_data.get('cidade_uf', '')}")
-                if st.button(f"🗑️ Excluir Cliente", key=f"del_cli_{cl_nome}"):
-                    del clientes_db[cl_nome]
-                    salvar_json(CLIENTES_FILE, clientes_db)
-                    st.rerun()
-
-    with tab_c3:
-        if clientes_db:
-            df_clientes_export = pd.DataFrame(list(clientes_db.values()))
-            csv_dados = df_clientes_export.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
-            st.download_button("📥 Baixar Planilha em Colunas (CSV / Excel)", data=csv_dados, file_name=f"base_clientes_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
-
-# 7. HISTÓRICO & PASTA DO CLIENTE (Do App 3)
-elif menu_admin == "📂 Histórico & Pasta do Cliente":
-    st.header("📂 Pasta Digital e Histórico Completo por Cliente")
-    if clientes_db:
-        cliente_selecionado_hist = st.selectbox("Selecione o Cliente", list(clientes_db.keys()))
-        if cliente_selecionado_hist:
-            nome_pasta = "".join(c for c in cliente_selecionado_hist if c.isalnum() or c in (' ', '_', '-')).strip()
-            cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta)
-            historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
-            
-            if os.path.exists(historico_path):
-                atendimentos = json.load(open(historico_path, encoding="utf-8"))
-                for idx, at in enumerate(reversed(atendimentos)):
-                    st.markdown(f"**📌 [{at.get('tipo')}]** — *Data: {at.get('data')}*")
-                    if "arquivo_pdf" in at:
-                        caminho_pdf = os.path.join(cliente_dir, at['arquivo_pdf'])
-                        if os.path.exists(caminho_pdf):
-                            st.download_button(f"📥 Baixar PDF ({at['arquivo_pdf']})", data=open(caminho_pdf, "rb").read(), file_name=at['arquivo_pdf'], mime="application/pdf", key=f"hist_pdf_{idx}")
-                    st.divider()
-
-# 8. GESTÃO DE CHAMADOS (Do App 3)
-elif menu_admin == "📋 Gestão de Chamados":
-    st.header("📋 Gestão de Chamados Técnicos")
-    for ch in reversed(chamados_db):
-        with st.expander(f"Chamado #{ch['id']} - {ch['cliente']} (Status: {ch['status']})"):
-            st.write(f"**Problema:** {ch['problema']}")
-            novo_status = st.selectbox("Status", ["Pendente", "Em Andamento", "Concluído", "Cancelado"], index=["Pendente", "Em Andamento", "Concluído", "Cancelado"].index(ch["status"]) if ch["status"] in ["Pendente", "Em Andamento", "Concluído", "Cancelado"] else 0, key=f"st_ch_{ch['id']}")
-            if st.button("Salvar Status", key=f"btn_st_{ch['id']}"):
-                ch["status"] = novo_status
-                salvar_json(CHAMADOS_FILE, chamados_db)
-                st.success("Status atualizado!")
+        st.subheader("Configuração SDAI")
+        c_csdai = st.text_input("Central SDAI (Modelo/Marca)")
+        c_tsdai = st.text_input("Tipo de Central", value="SISTEMA ENDEREÇÁVEL")
+        c_qlacos = st.text_input("Qtd. Laços", value="01 LAÇO")
+        
+        if st.form_submit_button("💾 Salvar Cliente"):
+            if c_nome_cad:
+                clientes_db[c_nome_cad] = {
+                    "nome": c_nome_cad, "cnpj": c_cnpj_cad, "endereco": c_end_cad,
+                    "cidade_uf": c_cid_cad, "contato": c_tel_cad, "email": c_email_cad,
+                    "central_sdai": c_csdai, "tipo_central": c_tsdai, "qtd_lacos": c_qlacos
+                }
+                salvar_json(CLIENTES_FILE, clientes_db)
+                st.success("Cliente cadastrado com sucesso!")
                 st.rerun()
 
-# 9. BACKUP DIÁRIO DO SISTEMA (Do App 2)
-elif menu_admin == "💾 Backup Diário":
-    st.title("💾 Central de Backup do Sistema")
-    col_b1, col_b2 = st.columns(2)
-    with col_b1:
-        if st.button("Executar Backup Agora", type="primary"):
-            b_path = perform_backup()
-            if b_path:
-                st.success("Backup do banco SQLite gerado com sucesso!")
-                with open(b_path, "rb") as f:
-                    st.download_button("Baixar Arquivo de Backup (.db)", f, file_name=os.path.basename(b_path), mime="application/octet-stream")
+elif menu == "📞 Gestão de Chamados":
+    st.header("📞 Chamados Técnicos Recebidos")
+    if not chamados_db:
+        st.info("Nenhum chamado pendente.")
+    else:
+        for ch in reversed(chamados_db):
+            with st.expander(f"Chamado #{ch['id']} - {ch['cliente']} (Status: {ch['status']})"):
+                st.write(f"**Solicitante:** {ch.get('solicitante', 'N/A')} | **Contato:** {ch.get('contato', 'N/A')}")
+                st.write(f"**Descrição:** {ch['problema']}")
+                if ch.get("anexo") and os.path.exists(ch["anexo"]):
+                    st.image(ch["anexo"], width=300)
+                
+                novo_status = st.selectbox("Atualizar Status", ["Pendente", "Em Andamento", "Concluído", "Cancelado"], index=["Pendente", "Em Andamento", "Concluído", "Cancelado"].index(ch["status"]) if ch["status"] in ["Pendente", "Em Andamento", "Concluído", "Cancelado"] else 0, key=f"status_adm_{ch['id']}")
+                if st.button("💾 Salvar Novo Status", key=f"btn_adm_ch_{ch['id']}"):
+                    ch["status"] = novo_status
+                    salvar_json(CHAMADOS_FILE, chamados_db)
+                    st.success("Status atualizado!")
+                    st.rerun()
 
-    st.divider()
-    st.subheader("Histórico de Backups SQLite Anteriores")
-    backup_dir = os.path.join(BASE_DIR, "backups")
-    if os.path.exists(backup_dir):
-        backups = os.listdir(backup_dir)
-        for b in sorted(backups, reverse=True):
-            b_full_path = os.path.join(backup_dir, b)
-            cols_bk = st.columns([3, 1])
-            with cols_bk[0]:
-                st.text(b)
-            with cols_bk[1]:
-                with open(b_full_path, "rb") as f:
-                    st.download_button("Baixar", f, file_name=b, key=f"down_bk_{b}")
+elif menu == "📂 Histórico & Pasta do Cliente":
+    st.header("📂 Pasta Digital por Cliente")
+    if clientes_db:
+        cli_sel = st.selectbox("Selecione o Cliente", list(clientes_db.keys()))
+        nome_pasta_cliente = "".join(c for c in cli_sel if c.isalnum() or c in (' ', '_', '-')).strip()
+        cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
+        
+        if os.path.exists(cliente_dir):
+            historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
+            if os.path.exists(historico_path):
+                with open(historico_path, "r", encoding="utf-8") as f:
+                    hist = json.load(f)
+                for item in reversed(hist):
+                    st.markdown(f"**[{item.get('tipo')}]** - Data: {item.get('data')}")
+                    st.json(item)
+                    st.divider()
 
-# 10. DADOS DA MINHA EMPRESA (Do App 3)
-elif menu_admin == "🏢 Dados da Minha Empresa":
+elif menu == "🏢 Dados da Minha Empresa":
     st.header("🏢 Configurações da Empresa Prestadora")
     with st.form("form_empresa"):
         e_nome = st.text_input("Nome da Empresa", value=empresa_db.get("nome", ""))
         e_cnpj = st.text_input("CNPJ", value=empresa_db.get("cnpj", ""))
-        e_crea = st.text_input("CREA / Registro", value=empresa_db.get("crea", ""))
-        e_end = st.text_input("Endereço", value=empresa_db.get("endereco", ""))
-        e_tel = st.text_input("Telefone", value=empresa_db.get("telefone", ""))
-        e_email = st.text_input("E-mail", value=empresa_db.get("email", ""))
-        e_resp = st.text_input("Responsável Técnico", value=empresa_db.get("resp_tecnico", ""))
-        logo_up = st.file_uploader("Logo da Empresa (PNG)", type=["png", "jpg", "jpeg"], key="uploader_logo")
-
-        if st.form_submit_button("💾 Salvar Dados da Empresa"):
-            empresa_db.update({"nome": e_nome, "cnpj": e_cnpj, "crea": e_crea, "endereco": e_end, "telefone": e_tel, "email": e_email, "resp_tecnico": e_resp})
-            if logo_up:
-                with open(LOGO_PATH, "wb") as f:
-                    f.write(logo_up.getbuffer())
+        e_crea = st.text_input("CREA", value=empresa_db.get("crea", ""))
+        
+        if st.form_submit_button("💾 Salvar"):
+            empresa_db["nome"] = e_nome
+            empresa_db["cnpj"] = e_cnpj
+            empresa_db["crea"] = e_crea
             salvar_json(EMPRESA_FILE, empresa_db)
-            st.success("✅ Dados atualizados!")
-            st.rerun()
+            st.success("Dados salvos!")
 
-# 11. GERENCIAR USUÁRIOS (Do App 3)
-elif menu_admin == "👥 Gerenciar Usuários":
-    st.header("👥 Gestão de Usuários e Acessos")
-    with st.form("form_novo_usuario"):
-        u_login = st.text_input("Login")
-        u_senha = st.text_input("Senha", type="password")
-        u_nome = st.text_input("Nome Completo")
-        u_perfil = st.selectbox("Perfil de Acesso", ["cliente", "master"])
+elif menu == "👥 Gerenciar Usuários":
+    st.header("👥 Gestão de Usuários e Vínculos com Clientes")
+    tab_u1, tab_u2 = st.tabs(["➕ Novo Usuário", "📋 Usuários Cadastrados"])
+    
+    with tab_u1:
+        with st.form("form_novo_usuario"):
+            u_login = st.text_input("Login de Acesso")
+            u_senha = st.text_input("Senha", type="password")
+            u_nome = st.text_input("Nome do Usuário / Responsável")
+            u_perfil = st.selectbox("Perfil de Acesso", ["cliente", "master"])
+            
+            lista_cli_vinculo = ["-- Nenhum / Administrador --"] + list(clientes_db.keys())
+            u_vinculo = st.selectbox("Vincular ao Cliente/Condomínio (Para Perfil Cliente)", lista_cli_vinculo)
+            
+            if st.form_submit_button("💾 Cadastrar Usuário"):
+                if u_login and u_senha:
+                    cli_final = u_vinculo if u_vinculo != "-- Nenhum / Administrador --" else ""
+                    usuarios[u_login] = {
+                        "senha": u_senha,
+                        "nome": u_nome,
+                        "perfil": u_perfil,
+                        "cliente_vinculado": cli_final
+                    }
+                    salvar_json(USUARIOS_FILE, usuarios)
+                    st.success(f"✅ Usuário {u_login} cadastrado com sucesso!")
+                    st.rerun()
 
-        if st.form_submit_button("💾 Cadastrar Usuário"):
-            if u_login and u_senha:
-                usuarios[u_login] = {"senha": u_senha, "nome": u_nome, "perfil": u_perfil}
-                salvar_json(USUARIOS_FILE, usuarios)
-                st.success(f"✅ Usuário {u_login} cadastrado!")
+    with tab_u2:
+        st.subheader("Lista de Usuários")
+        for u, d in usuarios.items():
+            st.markdown(f"**Login:** {u} | **Nome:** {d.get('nome')} | **Perfil:** `{d.get('perfil')}` | **Cliente Vinculado:** {d.get('cliente_vinculado', 'Nenhum')}")
+            st.divider()
+
+elif menu == "💾 Backup Diário":
+    st.header("💾 Central de Backup")
+    if st.button("Executar Backup do Banco de Dados (.db agora)"):
+        b_path = perform_backup()
+        if b_path:
+            st.success(f"Backup criado com sucesso em: {b_path}")
+            with open(b_path, "rb") as f:
+                st.download_button("Baixar Arquivo .db", f, file_name=os.path.basename(b_path))
