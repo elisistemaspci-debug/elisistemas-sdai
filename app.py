@@ -3,6 +3,7 @@ import io
 import json
 from datetime import datetime
 import streamlit as st
+import pandas as pd
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -36,7 +37,6 @@ def carregar_json(path, default):
 def salvar_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-    # Limpa o cache para recarregar atualizado se necessário
     carregar_json_cached.clear()
 
 # Carregamento inicial de dados
@@ -309,7 +309,6 @@ menu_admin = st.sidebar.radio(
 if "📋 Vistoria & Relatório Técnico" in menu_admin:
     st.header("📋 Inspeção Preventiva & Relatório NBR 17240")
 
-    # --- FUNÇÃO DE CALLBACK PARA CARREGAR RASCUNHO IMEDIATAMENTE ---
     def processar_upload_rascunho():
         arquivo = st.session_state.get("uploader_rascunho")
         if arquivo is not None:
@@ -478,9 +477,7 @@ if "📋 Vistoria & Relatório Técnico" in menu_admin:
 
     st.divider()
     
-    # --- GERAÇÃO E DOWNLOAD IMEDIATO DO PDF ---
     st.subheader("📄 Geração do Relatório PDF")
-    
     pdf_bytes = gerar_pdf_preventiva()
     nome_arquivo_pdf = f"Relatorio_SDAI_{st.session_state['cliente'].replace(' ', '_') if st.session_state['cliente'] else 'Geral'}_{datetime.now().strftime('%Y%m%d')}.pdf"
     
@@ -495,7 +492,7 @@ if "📋 Vistoria & Relatório Técnico" in menu_admin:
 
 elif "🏢 Cadastro de Clientes & SDAI" in menu_admin:
     st.header("🏢 Gestão de Clientes e Equipamentos SDAI")
-    tab_c1, tab_c2 = st.tabs(["➕ Adicionar / Editar Cliente", "📋 Lista de Clientes Cadastrados"])
+    tab_c1, tab_c2, tab_c3 = st.tabs(["➕ Adicionar / Editar Cliente", "📋 Lista de Clientes Cadastrados", "📊 Importar / Exportar Planilha"])
 
     with tab_c1:
         with st.form("form_cad_cliente"):
@@ -550,6 +547,58 @@ elif "🏢 Cadastro de Clientes & SDAI" in menu_admin:
                         salvar_json(CLIENTES_FILE, clientes_db)
                         st.success(f"Cliente {cl_nome} excluído!")
                         st.rerun()
+
+    with tab_c3:
+        st.subheader("📊 Importar e Exportar Planilha de Clientes")
+        
+        # Seção de Download da Planilha Atual
+        st.write("### 📥 Baixar Planilha Cadastral")
+        st.info("Baixe todos os dados dos clientes cadastrados em formato de planilha (CSV) para editar no Excel ou Google Planilhas.")
+        
+        if clientes_db:
+            lista_para_df = []
+            for nome_cli, dados_cli in clientes_db.items():
+                lista_para_df.append(dados_cli)
+            df_clientes_export = pd.DataFrame(lista_para_df)
+            
+            csv_dados = df_clientes_export.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Baixar Planilha de Clientes (CSV)",
+                data=csv_dados,
+                file_name=f"base_clientes_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        else:
+            st.warning("Não há clientes cadastrados para exportar no momento.")
+
+        st.divider()
+
+        # Seção de Upload (Atualização da Planilha)
+        st.write("### 📤 Atualizar / Enviar Planilha de Clientes")
+        st.info("Envie um arquivo CSV atualizado contendo os cadastros de clientes para sincronizar com o sistema.")
+        
+        arquivo_upload_clientes = st.file_uploader("Escolha o arquivo CSV de clientes atualizado", type=["csv"], key="upload_clientes_csv")
+        
+        if arquivo_upload_clientes is not None:
+            if st.button("Confirmar e Sincronizar Base de Clientes", type="primary"):
+                try:
+                    df_novo_upload = pd.read_csv(arquivo_upload_clientes)
+                    
+                    novo_db = {}
+                    for _, row in df_novo_upload.iterrows():
+                        nome_cliente = str(row.get("nome", ""))
+                        if nome_cliente and nome_cliente != "nan":
+                            novo_db[nome_cliente] = row.to_dict()
+                    
+                    clientes_db.clear()
+                    clientes_db.update(novo_db)
+                    salvar_json(CLIENTES_FILE, clientes_db)
+                    
+                    st.success("✅ Base de clientes atualizada e importada com sucesso!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao processar o arquivo enviado: {e}")
 
 elif "🏢 Dados da Minha Empresa" in menu_admin:
     st.header("🏢 Configurações da Empresa Prestadora")
@@ -626,18 +675,3 @@ elif "👥 Gerenciar Usuários" in menu_admin:
                     usuarios[u_login] = {"senha": u_senha, "nome": u_nome, "perfil": u_perfil}
                     salvar_json(USUARIOS_FILE, usuarios)
                     st.success(f"✅ Usuário {u_login} cadastrado com sucesso!")
-                else:
-                    st.warning("Preencha login e senha.")
-
-    with tab_u2:
-        st.subheader("Usuários Ativos")
-        for u_key, u_val in list(usuarios.items()):
-            with st.expander(f"👤 {u_key} ({u_val.get('perfil', '')}) - {u_val.get('nome', '')}"):
-                if u_key != "admin":
-                    if st.button(f"🗑️ Excluir Usuário {u_key}", key=f"del_u_{u_key}"):
-                        del usuarios[u_key]
-                        salvar_json(USUARIOS_FILE, usuarios)
-                        st.success(f"Usuário {u_key} excluído!")
-                        st.rerun()
-                else:
-                    st.caption("O usuário administrador principal não pode ser excluído.")
