@@ -1,6 +1,8 @@
 import os
 import io
 import json
+import sqlite3
+import shutil
 from datetime import datetime
 import streamlit as st
 import pandas as pd
@@ -9,8 +11,12 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-# --- CONFIGURAÇÃO DE DIRETÓRIOS ---
+# --- CONFIGURAÇÃO DA PÁGINA ---
+st.set_page_config(page_title="Eli Sistemas - Gestão, SDAI & Agenda", page_icon="⚡", layout="wide")
+
+# --- CONFIGURAÇÃO DE DIRETÓRIOS E ARQUIVOS ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in locals() else "."
+DB_FILE = os.path.join(BASE_DIR, "eli_sistemas.db")
 CLIENTES_FILE = os.path.join(BASE_DIR, "clientes.json")
 EMPRESA_FILE = os.path.join(BASE_DIR, "empresa.json")
 CHAMADOS_FILE = os.path.join(BASE_DIR, "chamados.json")
@@ -22,6 +28,45 @@ HISTORICO_CLIENTES_DIR = os.path.join(BASE_DIR, "historico_clientes")
 os.makedirs(PASTA_FOTOS_VISTORIA, exist_ok=True)
 os.makedirs(HISTORICO_CLIENTES_DIR, exist_ok=True)
 
+# --- INICIALIZAÇÃO DO BANCO DE DADOS (AGENDA E RELATÓRIOS EXPRESSOS) ---
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            client TEXT,
+            date TEXT,
+            content TEXT,
+            type TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS agenda (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task TEXT,
+            category TEXT, 
+            due_date TEXT,
+            status TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def perform_backup():
+    backup_dir = os.path.join(BASE_DIR, "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = os.path.join(backup_dir, f"backup_{timestamp}.db")
+    if os.path.exists(DB_FILE):
+        shutil.copyfile(DB_FILE, backup_path)
+        return backup_path
+    return None
+
+# --- AUXILIARES JSON ---
 @st.cache_data
 def carregar_json_cached(path):
     if os.path.exists(path):
@@ -42,7 +87,6 @@ def salvar_json(path, data):
     carregar_json_cached.clear()
 
 def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict):
-    """Função unificada para salvar qualquer evento/relatório/chamado na pasta do cliente."""
     if not nome_cliente:
         return
     nome_pasta_cliente = "".join(c for c in nome_cliente.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
@@ -114,17 +158,14 @@ ITENS_SECOES = {
     ]
 }
 
-# --- CONFIGURAÇÃO DA PÁGINA E CONTROLE DE AUTENTICAÇÃO ---
-st.set_page_config(page_title="SDAI - Gestão & Inspeção Técnica", layout="wide")
-
+# --- AUTENTICAÇÃO ---
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["user"] = ""
     st.session_state["perfil"] = ""
 
-# Se não estiver logado, exibe apenas a tela de login e interrompe a execução
 if not st.session_state["logged_in"]:
-    st.title("🔥 SDAI - Sistema de Gestão e Inspeção Técnica")
+    st.title("⚡ Eli Sistemas - Gestão, Inspeção & Agenda")
     st.subheader("Login de Acesso")
     
     with st.form("form_login"):
@@ -143,15 +184,10 @@ if not st.session_state["logged_in"]:
                 st.error("Usuário ou senha incorretos.")
     st.stop()
 
+# --- MOTORES DE PDF ---
 def gerar_pdf_preventiva():
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        rightMargin=20, leftMargin=20,
-        topMargin=20, bottomMargin=20
-    )
-    
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
     story = []
     styles = getSampleStyleSheet()
     
@@ -161,10 +197,7 @@ def gerar_pdf_preventiva():
     style_sec_header = ParagraphStyle('SecHeader', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.black)
 
     logo_w, logo_h = 45, 30
-    if os.path.exists(LOGO_PATH):
-        img_logo = Image(LOGO_PATH, width=logo_w, height=logo_h)
-    else:
-        img_logo = Paragraph("<b>LOGO</b>", style_celula)
+    img_logo = Image(LOGO_PATH, width=logo_w, height=logo_h) if os.path.exists(LOGO_PATH) else Paragraph("<b>LOGO</b>", style_celula)
 
     info_empresa_texto = f"""
     <b>{empresa_db.get('nome', '')}</b><br/>
@@ -292,7 +325,6 @@ def gerar_pdf_preventiva():
     buffer.seek(0)
     pdf_data = buffer.getvalue()
 
-    # SALVAR AUTOMATICAMENTE NA PASTA DO CLIENTE
     nome_cliente_atual = st.session_state.get('cliente', '').strip()
     if nome_cliente_atual:
         nome_pasta_cliente = "".join(c for c in nome_cliente_atual if c.isalnum() or c in (' ', '_', '-')).strip()
@@ -328,11 +360,7 @@ def gerar_pdf_chamado_simples():
     style_texto_empresa = ParagraphStyle('EmpresaText', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.black)
     style_sec_header = ParagraphStyle('SecHeader', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.black)
 
-    logo_w, logo_h = 45, 30
-    if os.path.exists(LOGO_PATH):
-        img_logo = Image(LOGO_PATH, width=logo_w, height=logo_h)
-    else:
-        img_logo = Paragraph("<b>LOGO</b>", style_celula)
+    img_logo = Image(LOGO_PATH, width=45, height=30) if os.path.exists(LOGO_PATH) else Paragraph("<b>LOGO</b>", style_celula)
 
     info_empresa_texto = f"""
     <b>{empresa_db.get('nome', '')}</b><br/>
@@ -388,7 +416,6 @@ def gerar_pdf_chamado_simples():
         story.append(Spacer(1, 10))
         story.append(Paragraph("<b>5. REGISTRO FOTOGRÁFICO</b>", style_sec_header))
         story.append(Spacer(1, 4))
-        
         linhas_fotos = []
         par_atual = []
         for f_path in fotos:
@@ -416,7 +443,6 @@ def gerar_pdf_chamado_simples():
         nome_pasta_cliente = "".join(c for c in nome_cliente_atual if c.isalnum() or c in (' ', '_', '-')).strip()
         cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
         os.makedirs(cliente_dir, exist_ok=True)
-        
         data_hora_str = datetime.now().strftime('%Y%m%d_%H%M%S')
         nome_arq_pdf = f"Vistoria_Chamado_{data_hora_str}.pdf"
         caminho_completo_pdf = os.path.join(cliente_dir, nome_arq_pdf)
@@ -445,11 +471,7 @@ def gerar_pdf_orcamento():
     style_texto_empresa = ParagraphStyle('EmpresaText', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.black)
     style_sec_header = ParagraphStyle('SecHeader', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.black)
 
-    logo_w, logo_h = 45, 30
-    if os.path.exists(LOGO_PATH):
-        img_logo = Image(LOGO_PATH, width=logo_w, height=logo_h)
-    else:
-        img_logo = Paragraph("<b>LOGO</b>", style_celula)
+    img_logo = Image(LOGO_PATH, width=45, height=30) if os.path.exists(LOGO_PATH) else Paragraph("<b>LOGO</b>", style_celula)
 
     info_empresa_texto = f"""
     <b>{empresa_db.get('nome', '')}</b><br/>
@@ -510,7 +532,6 @@ def gerar_pdf_orcamento():
         nome_pasta_cliente = "".join(c for c in nome_cliente_atual if c.isalnum() or c in (' ', '_', '-')).strip()
         cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
         os.makedirs(cliente_dir, exist_ok=True)
-        
         data_hora_str = datetime.now().strftime('%Y%m%d_%H%M%S')
         nome_arq_pdf = f"Orcamento_{data_hora_str}.pdf"
         caminho_completo_pdf = os.path.join(cliente_dir, nome_arq_pdf)
@@ -530,6 +551,7 @@ def gerar_pdf_orcamento():
 
     return pdf_data
 
+# --- INICIALIZAÇÃO DOS ESTADOS PADRÃO ---
 defaults_vistoria = {
     "cliente": "", "cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP",
     "sindico": "", "zelador": "", "contato": "", "email": "",
@@ -580,28 +602,99 @@ for sec_key in ITENS_SECOES:
         if f"{sec_key}_{idx}_status" not in st.session_state:
             st.session_state[f"{sec_key}_{idx}_status"] = "CONFORME"
 
-st.sidebar.title(f"Bem-vindo, {st.session_state['user']}")
+# --- MENU LATERAL INTEGRADO ---
+st.sidebar.title(f"⚡ Eli Sistemas")
+st.sidebar.caption(f"Usuário: {st.session_state['user']}")
 if st.sidebar.button("🚪 Sair / Logout"):
     st.session_state["logged_in"] = False
     st.rerun()
 
 st.sidebar.divider()
 menu_admin = st.sidebar.radio(
-    "Menu Principal",
+    "Navegação do Sistema",
     [
-        "📋 Vistoria & Relatório Técnico",
-        "🛠️ Vistoria Simples / Chamado",
+        "📅 Agenda Principal",
+        "📋 Vistoria & Relatório Técnico (PDF)",
+        "🛠️ Vistoria Simples / Chamado (PDF)",
+        "📄 Relatórios Expressos (HTML)",
         "💰 Orçamento Comercial",
         "🏢 Cadastro de Clientes & SDAI",
         "📂 Histórico & Pasta do Cliente",
+        "📋 Gestão de Chamados",
+        "💾 Backup Diário",
         "🏢 Dados da Minha Empresa",
-        "📋 Chamados",
         "👥 Gerenciar Usuários"
     ]
 )
 
-# --- ABA 3.1: VISTORIA & RELATÓRIO TÉCNICO ---
-if "📋 Vistoria & Relatório Técnico" in menu_admin:
+# 1. AGENDA PRINCIPAL (Do App 2)
+if menu_admin == "📅 Agenda Principal":
+    st.title("📅 Agenda de Atividades")
+    st.write("Gerencie suas tarefas diárias, semanais e mensais com controle de status.")
+    
+    with st.form("new_task_form", clear_on_submit=True):
+        st.subheader("Cadastrar Nova Tarefa")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            task_name = st.text_input("Descrição da Tarefa / Serviço")
+        with col2:
+            category = st.selectbox("Período / Categoria", ["Diária", "Semanal", "Mensal"])
+        with col3:
+            due_date = st.date_input("Data Alvo", value=datetime.today())
+            
+        submitted = st.form_submit_button("Cadastrar na Agenda")
+        if submitted and task_name:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO agenda (task, category, due_date, status) VALUES (?, ?, ?, ?)",
+                           (task_name, category, str(due_date), "Não realizado"))
+            conn.commit()
+            conn.close()
+            st.success("Tarefa cadastrada com sucesso!")
+            st.rerun()
+
+    st.divider()
+    st.subheader("Gerenciamento de Tarefas")
+    
+    conn = sqlite3.connect(DB_FILE)
+    df_agenda = pd.read_sql("SELECT * FROM agenda ORDER BY due_date ASC", conn)
+    conn.close()
+    
+    if not df_agenda.empty:
+        filter_cat = st.selectbox("Filtrar por Período", ["Todas", "Diária", "Semanal", "Mensal"])
+        if filter_cat != "Todas":
+            df_agenda = df_agenda[df_agenda["category"] == filter_cat]
+            
+        for index, row in df_agenda.iterrows():
+            cols = st.columns([3, 1, 1, 1])
+            with cols[0]:
+                st.markdown(f"**{row['task']}**<br><small style='color:gray;'>Período: {row['category']} | Data: {row['due_date']}</small>", unsafe_allow_html=True)
+            with cols[1]:
+                status_color = "green" if row['status'] == "Realizado" else "orange"
+                st.markdown(f"<span style='color:{status_color}; font-weight:bold;'>● {row['status']}</span>", unsafe_allow_html=True)
+            with cols[2]:
+                new_status = st.selectbox("Status", ["Não realizado", "Realizado"], key=f"status_{row['id']}", index=0 if row['status']=="Não realizado" else 1)
+                if new_status != row['status']:
+                    conn = sqlite3.connect(DB_FILE)
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE agenda SET status = ? WHERE id = ?", (new_status, row['id']))
+                    conn.commit()
+                    conn.close()
+                    st.rerun()
+            with cols[3]:
+                st.write("")
+                if st.button("Excluir", key=f"del_{row['id']}"):
+                    conn = sqlite3.connect(DB_FILE)
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM agenda WHERE id = ?", (row['id'],))
+                    conn.commit()
+                    conn.close()
+                    st.rerun()
+    else:
+        st.info("Nenhuma tarefa cadastrada no momento.")
+
+# 2. VISTORIA & RELATÓRIO TÉCNICO COMPLETO NBR (Do App 3)
+elif menu_admin == "📋 Vistoria & Relatório Técnico (PDF)":
     st.header("📋 Inspeção Preventiva & Relatório NBR 17240")
 
     def processar_upload_rascunho():
@@ -617,48 +710,22 @@ if "📋 Vistoria & Relatório Técnico" in menu_admin:
 
     with st.expander("💾 Salvar / Carregar Rascunho do Relatório", expanded=True):
         col_rasc1, col_rasc2 = st.columns(2)
-        
         with col_rasc1:
             st.write("**Exportar Rascunho Atual**")
-            dados_rascunho = {}
-            for k, v in st.session_state.items():
-                if k not in ["logged_in", "user", "perfil"] and not k.startswith("uploader_") and not k.startswith("_"):
-                    try:
-                        json.dumps(v)
-                        dados_rascunho[k] = v
-                    except:
-                        pass
-
+            dados_rascunho = {k: v for k, v in st.session_state.items() if k not in ["logged_in", "user", "perfil"] and not k.startswith("uploader_") and not k.startswith("_")}
             json_str = json.dumps(dados_rascunho, ensure_ascii=False, indent=4)
-            st.download_button(
-                label="📥 Baixar Arquivo de Rascunho (.json)",
-                data=json_str,
-                file_name=f"rascunho_vistoria_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
-                mime="application/json",
-                use_container_width=True
-            )
-            
+            st.download_button("📥 Baixar Arquivo de Rascunho (.json)", data=json_str, file_name=f"rascunho_vistoria_{datetime.now().strftime('%Y%m%d_%H%M')}.json", mime="application/json", use_container_width=True)
         with col_rasc2:
             st.write("**Importar Rascunho Salvo**")
-            st.file_uploader(
-                "Enviar arquivo .json salvo anteriormente", 
-                type=["json"], 
-                key="uploader_rascunho", 
-                on_change=processar_upload_rascunho
-            )
+            st.file_uploader("Enviar arquivo .json salvo anteriormente", type=["json"], key="uploader_rascunho", on_change=processar_upload_rascunho)
             if st.session_state.get("_sucesso_rascunho"):
                 st.success("✅ Rascunho carregado e campos recuperados com sucesso!")
                 st.session_state["_sucesso_rascunho"] = False
-            if st.session_state.get("_erro_rascunho"):
-                st.error(f"Erro ao ler rascunho: {st.session_state['_erro_rascunho']}")
-                st.session_state["_erro_rascunho"] = None
 
     st.divider()
-    
     if clientes_db:
         st.subheader("📁 Carregar Cliente Cadastrado")
         lista_clientes_nomes = ["-- Selecione --"] + list(clientes_db.keys())
-        
         def ao_selecionar_cliente():
             cli_nome = st.session_state["select_carregar_cliente"]
             if cli_nome != "-- Selecione --" and cli_nome in clientes_db:
@@ -684,7 +751,6 @@ if "📋 Vistoria & Relatório Técnico" in menu_admin:
 
     st.divider()
     st.subheader("📝 Edição dos Dados Gerais da Visita")
-    
     col1, col2 = st.columns(2)
     with col1:
         st.text_input("Cliente / Condomínio", key="cliente")
@@ -701,11 +767,7 @@ if "📋 Vistoria & Relatório Técnico" in menu_admin:
         st.text_input("Responsável Técnico", key="resp_tecnico")
         st.text_input("Acompanhante / Portaria", key="acompanhante")
 
-    st.selectbox(
-        "Status Geral / Parecer",
-        ["CONFORME / SISTEMA OPERACIONAL", "CONFORME COM RESSALVAS", "NÃO CONFORME / INTERLIGADO COM FALHAS"],
-        key="status_geral"
-    )
+    st.selectbox("Status Geral / Parecer", ["CONFORME / SISTEMA OPERACIONAL", "CONFORME COM RESSALVAS", "NÃO CONFORME / INTERLIGADO COM FALHAS"], key="status_geral")
 
     st.divider()
     st.subheader("⚙️ Características Técnicas do Sistema")
@@ -728,11 +790,10 @@ if "📋 Vistoria & Relatório Técnico" in menu_admin:
 
     st.divider()
     st.subheader("🔍 Verificação dos Itens Normativos (Checklist)")
-
     sec_nomes = {
         "sec3": "3. Verificação Física e Elétrica da Central e Fontes",
         "sec4": "4. Integridade das Linhas de Sinal (Laços)",
-        "sec5": "5. Ensios Funcionais & Amostragem de Periféricos",
+        "sec5": "5. Ensaios Funcionais & Amostragem de Periféricos",
         "sec6": "6. Pressurização de Escadas de Segurança (IT 13)"
     }
 
@@ -764,74 +825,16 @@ if "📋 Vistoria & Relatório Técnico" in menu_admin:
                 st.session_state["fotos_carregadas"].append(f_path)
         st.success("✅ Fotos carregadas com sucesso!")
 
-    if st.session_state["fotos_carregadas"]:
-        st.write(f"Total de fotos anexadas: {len(st.session_state['fotos_carregadas'])}")
-        if st.button("🗑️ Limpar Fotos Anexadas"):
-            st.session_state["fotos_carregadas"] = []
-            st.rerun()
-
     st.divider()
-    
-    st.subheader("📄 Geração do Relatório PDF")
     pdf_bytes = gerar_pdf_preventiva()
     nome_arquivo_pdf = f"Relatorio_SDAI_{st.session_state['cliente'].replace(' ', '_') if st.session_state['cliente'] else 'Geral'}_{datetime.now().strftime('%Y%m%d')}.pdf"
     
-    st.download_button(
-        label="📄 GERAR, SALVAR NA PASTA E BAIXAR RELATÓRIO PDF",
-        data=pdf_bytes,
-        file_name=nome_arquivo_pdf,
-        mime="application/pdf",
-        type="primary",
-        use_container_width=True
-    )
+    st.download_button(label="📄 GERAR, SALVAR NA PASTA E BAIXAR RELATÓRIO PDF", data=pdf_bytes, file_name=nome_arquivo_pdf, mime="application/pdf", type="primary", use_container_width=True)
 
-elif "🛠️ Vistoria Simples / Chamado" in menu_admin:
-    st.header("🛠️ Relatório Simples de Vistoria / Chamado Técnico")
-    st.info("Formulário simplificado com dados do cliente, informações do SDAI e um campo aberto para digitação do relato técnico e anexo opcional de fotos.")
-
-    def processar_upload_rascunho_cs():
-        arquivo = st.session_state.get("uploader_rascunho_cs")
-        if arquivo is not None:
-            try:
-                rascunho_carregado = json.load(arquivo)
-                for k, v in rascunho_carregado.items():
-                    st.session_state[k] = v
-                st.session_state["_sucesso_rascunho_cs"] = True
-            except Exception as e:
-                st.session_state["_erro_rascunho_cs"] = str(e)
-
-    with st.expander("💾 Salvar / Carregar Rascunho deste Atendimento", expanded=True):
-        col_rasc1, col_rasc2 = st.columns(2)
-        with col_rasc1:
-            st.write("**Exportar Rascunho Atual**")
-            dados_rascunho_cs = {}
-            for k, v in st.session_state.items():
-                if k.startswith("cs_") or k in ["resp_tecnico"]:
-                    try:
-                        json.dumps(v)
-                        dados_rascunho_cs[k] = v
-                    except:
-                        pass
-            json_str_cs = json.dumps(dados_rascunho_cs, ensure_ascii=False, indent=4)
-            st.download_button(
-                label="📥 Baixar Rascunho (.json)",
-                data=json_str_cs,
-                file_name=f"rascunho_chamado_simples_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
-                mime="application/json",
-                use_container_width=True
-            )
-        with col_rasc2:
-            st.write("**Importar Rascunho Salvo**")
-            st.file_uploader("Enviar arquivo .json", type=["json"], key="uploader_rascunho_cs", on_change=processar_upload_rascunho_cs)
-            if st.session_state.get("_sucesso_rascunho_cs"):
-                st.success("✅ Rascunho carregado com sucesso!")
-                st.session_state["_sucesso_rascunho_cs"] = False
-            if st.session_state.get("_erro_rascunho_cs"):
-                st.error(f"Erro ao ler rascunho: {st.session_state['_erro_rascunho_cs']}")
-                st.session_state["_erro_rascunho_cs"] = None
-
-    st.divider()
-
+# 3. VISTORIA SIMPLES / CHAMADO PDF (Do App 3)
+elif menu_admin == "🛠️ Vistoria Simples / Chamado (PDF)":
+    st.header("🛠️ Relatório Simples de Vistoria / Chamado Técnico (PDF)")
+    
     if clientes_db:
         st.subheader("📁 Puxar Dados de Cliente Cadastrado")
         lista_clientes_nomes_cs = ["-- Selecione --"] + list(clientes_db.keys())
@@ -849,7 +852,6 @@ elif "🛠️ Vistoria Simples / Chamado" in menu_admin:
         st.selectbox("Selecione o Cliente", lista_clientes_nomes_cs, key="select_carregar_cliente_cs", on_change=ao_selecionar_cliente_cs)
 
     st.divider()
-    st.subheader("📝 Dados Gerais")
     col_cs1, col_cs2 = st.columns(2)
     with col_cs1:
         st.text_input("Cliente / Empresa", key="cs_cliente")
@@ -862,99 +864,76 @@ elif "🛠️ Vistoria Simples / Chamado" in menu_admin:
         st.text_input("Tipo de Atendimento", key="cs_tipo")
         st.text_input("Responsável Técnico", key="cs_resp_tecnico")
 
-    st.divider()
-    st.subheader("⚙️ Informações Técnicas do SDAI")
-    col_tc1, col_tc2, col_tc3 = st.columns(3)
-    with col_tc1:
-        st.text_input("Central SDAI", key="cs_central_sdai")
-    with col_tc2:
-        st.text_input("Tipo Central", key="cs_tipo_central")
-    with col_tc3:
-        st.text_input("Qtd. Laços / Zonas", key="cs_qtd_lacos")
-
-    st.divider()
-    st.subheader("📄 Relato Técnico / Escopo Executado")
-    st.text_area("Descreva detalhadamente a vistoria, o chamado ou os serviços executados:", key="cs_relato", height=150)
-
-    st.subheader("📸 Registro Fotográfico do Atendimento")
-    uploaded_fotos_cs = st.file_uploader("Enviar Fotos", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="uploader_fotos_cs")
-    if uploaded_fotos_cs:
-        for foto in uploaded_fotos_cs:
-            f_path = os.path.join(PASTA_FOTOS_VISTORIA, foto.name)
-            with open(f_path, "wb") as f:
-                f.write(foto.getbuffer())
-            if f_path not in st.session_state["cs_fotos_carregadas"]:
-                st.session_state["cs_fotos_carregadas"].append(f_path)
-        st.success("✅ Fotos carregadas com sucesso!")
-
-    if st.session_state["cs_fotos_carregadas"]:
-        st.write(f"Total de fotos anexadas: {len(st.session_state['cs_fotos_carregadas'])}")
-        if st.button("🗑️ Limpar Fotos Anexadas", key="btn_limpar_fotos_cs"):
-            st.session_state["cs_fotos_carregadas"] = []
-            st.rerun()
-
-    st.divider()
+    st.text_area("Descreva detalhadamente a vistoria ou chamado:", key="cs_relato", height=150)
     pdf_bytes_cs = gerar_pdf_chamado_simples()
-    nome_arq_cs = f"Relatorio_Simples_{st.session_state['cs_cliente'].replace(' ', '_') if st.session_state['cs_cliente'] else 'Geral'}_{datetime.now().strftime('%Y%m%d')}.pdf"
+    st.download_button("📄 GERAR E BAIXAR PDF DO ATENDIMENTO", data=pdf_bytes_cs, file_name=f"Chamado_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf", type="primary", use_container_width=True)
+
+# 4. RELATÓRIOS EXPRESSOS HTML (Do App 2)
+elif menu_admin == "📄 Relatórios Expressos (HTML)":
+    st.title("📄 Emissão Rápida de Relatórios e Vistorias em HTML")
     
-    st.download_button(
-        label="📄 GERAR, SALVAR NA PASTA DO CLIENTE E BAIXAR PDF",
-        data=pdf_bytes_cs,
-        file_name=nome_arq_cs,
-        mime="application/pdf",
-        type="primary",
-        use_container_width=True
-    )
-
-elif "💰 Orçamento Comercial" in menu_admin:
-    st.header("💰 Elaboração de Orçamento Comercial")
-    st.info("Puxe os dados cadastrados do cliente, defina o escopo de serviços/materiais, os valores e as condições de pagamento.")
-
-    def processar_upload_rascunho_orc():
-        arquivo = st.session_state.get("uploader_rascunho_orc")
-        if arquivo is not None:
-            try:
-                rascunho_carregado = json.load(arquivo)
-                for k, v in rascunho_carregado.items():
-                    st.session_state[k] = v
-                st.session_state["_sucesso_rascunho_orc"] = True
-            except Exception as e:
-                st.session_state["_erro_rascunho_orc"] = str(e)
-
-    with st.expander("💾 Salvar / Carregar Rascunho do Orçamento", expanded=True):
-        col_rasc1, col_rasc2 = st.columns(2)
-        with col_rasc1:
-            st.write("**Exportar Rascunho Atual**")
-            dados_rascunho_orc = {}
-            for k, v in st.session_state.items():
-                if k.startswith("orc_"):
-                    try:
-                        json.dumps(v)
-                        dados_rascunho_orc[k] = v
-                    except:
-                        pass
-            json_str_orc = json.dumps(dados_rascunho_orc, ensure_ascii=False, indent=4)
-            st.download_button(
-                label="📥 Baixar Rascunho (.json)",
-                data=json_str_orc,
-                file_name=f"rascunho_orcamento_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
-                mime="application/json",
-                use_container_width=True
-            )
-        with col_rasc2:
-            st.write("**Importar Rascunho Salvo**")
-            st.file_uploader("Enviar arquivo .json", type=["json"], key="uploader_rascunho_orc", on_change=processar_upload_rascunho_orc)
-            if st.session_state.get("_sucesso_rascunho_orc"):
-                st.success("✅ Rascunho carregado com sucesso!")
-                st.session_state["_sucesso_rascunho_orc"] = False
-            if st.session_state.get("_erro_rascunho_orc"):
-                st.error(f"Erro ao ler rascunho: {st.session_state['_erro_rascunho_orc']}")
-                st.session_state["_erro_rascunho_orc"] = None
+    LOGO_HTML = f'''
+    <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #b71c1c; padding-bottom: 10px; margin-bottom: 20px;">
+        <div>
+            <h2 style="color: #b71c1c; margin: 0; font-size: 20px;">{empresa_db.get("nome", "ELI SISTEMAS")}</h2>
+            <p style="margin: 0; font-size: 11px; color: #555;">Sistemas de Alarme, Detecção e Segurança contra Incêndio</p>
+        </div>
+        <div style="text-align: right; font-size: 11px; color: #666;">
+            <b>Relatório Técnico Oficial</b><br>
+            Emissão: {datetime.now().strftime("%d/%m/%Y %H:%M")}
+        </div>
+    </div>
+    '''
+    
+    with st.form("report_form", clear_on_submit=True):
+        st.subheader("Novo Relatório Rápido")
+        rep_title = st.text_input("Título do Relatório")
+        client = st.text_input("Cliente / Local da Obra")
+        rep_type = st.selectbox("Tipo de Documento", ["Vistoria Técnica", "Manutenção Preventiva", "Auditoria de Sinalização"])
+        content = st.text_area("Descrição Técnica, Equipamentos e Conclusão")
+        
+        gen_btn = st.form_submit_button("Salvar no Banco e Gerar HTML")
+        if gen_btn and rep_title:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO reports (title, client, date, content, type) VALUES (?, ?, ?, ?, ?)",
+                           (rep_title, client, datetime.now().strftime("%d/%m/%Y %H:%M"), content, rep_type))
+            conn.commit()
+            conn.close()
+            st.success("Relatório salvo no banco de dados!")
 
     st.divider()
+    st.subheader("Histórico de Relatórios em HTML")
+    conn = sqlite3.connect(DB_FILE)
+    df_reports = pd.read_sql("SELECT * FROM reports ORDER BY id DESC", conn)
+    conn.close()
+    
+    if not df_reports.empty:
+        for idx, row in df_reports.iterrows():
+            with st.expander(f"[{row['type']}] {row['title']} - Cliente: {row['client']} ({row['date']})"):
+                preview_html = f'''
+                <div style="border: 1px solid #ccc; padding: 25px; border-radius: 8px; background: white; color: black; font-family: Arial, sans-serif;">
+                    {LOGO_HTML}
+                    <h3 style="color: #222; margin-bottom: 5px;">{row['title']}</h3>
+                    <p style="margin: 4px 0;"><b>Cliente / Local:</b> {row['client']}</p>
+                    <p style="margin: 4px 0;"><b>Data de Emissão:</b> {row['date']}</p>
+                    <hr style="border:0; border-top:1px solid #ddd; margin: 15px 0;">
+                    <p style="margin: 4px 0;"><b>Tipo de Serviço:</b> {row['type']}</p>
+                    <p style="white-space: pre-wrap; margin-top: 15px;">{row['content']}</p>
+                    <br><br>
+                    <div style="display: flex; justify-content: space-between; margin-top: 50px; font-size: 12px; color: #333;">
+                        <div style="text-align: center;">____________________________________________<br>Eli Sistemas<br>Responsável Técnico</div>
+                        <div style="text-align: center;">____________________________________________<br>Assinatura do Cliente / Contratante</div>
+                    </div>
+                </div>
+                '''
+                st.markdown(preview_html, unsafe_allow_html=True)
+                st.download_button("📥 Baixar Relatório (HTML)", data=preview_html, file_name=f"relatorio_{row['id']}.html", mime="text/html", key=f"dl_html_{row['id']}")
 
+# 5. ORÇAMENTO COMERCIAL (Do App 3)
+elif menu_admin == "💰 Orçamento Comercial":
+    st.header("💰 Elaboração de Orçamento Comercial")
     if clientes_db:
-        st.subheader("📁 Puxar Dados do Cliente Cadastrado")
         lista_clientes_nomes_orc = ["-- Selecione --"] + list(clientes_db.keys())
         def ao_selecionar_cliente_orc():
             cli_nome = st.session_state["select_carregar_cliente_orc"]
@@ -968,7 +947,6 @@ elif "💰 Orçamento Comercial" in menu_admin:
         st.selectbox("Selecione o Cliente", lista_clientes_nomes_orc, key="select_carregar_cliente_orc", on_change=ao_selecionar_cliente_orc)
 
     st.divider()
-    st.subheader("📝 Dados Comerciais")
     col_orc1, col_orc2 = st.columns(2)
     with col_orc1:
         st.text_input("Cliente / Condomínio", key="orc_cliente")
@@ -981,34 +959,17 @@ elif "💰 Orçamento Comercial" in menu_admin:
         st.text_input("Validade da Proposta", key="orc_validade")
         st.text_input("Responsável Técnico / Emissor", key="orc_resp_tecnico")
 
-    st.divider()
-    st.subheader("🛠️ Escopo dos Serviços e Fornecimento")
-    st.text_area("Descreva detalhadamente o escopo técnico, equipamentos, materiais e mão de obra inclusos:", key="orc_escopo", height=150)
-
-    st.subheader("💵 Valores e Condições de Pagamento")
+    st.text_area("Descreva detalhadamente o escopo técnico, equipamentos, materiais e mão de obra:", key="orc_escopo", height=150)
     st.text_input("Valor Total (Ex: R$ 3.500,00)", key="orc_valores")
-    st.text_area("Prazo de Execução e Condições de Pagamento (Ex: 50% de entrada e 50% após conclusão; Prazo de entrega: 5 dias úteis)", key="orc_pagamento", height=80)
+    st.text_area("Prazo de Execução e Condições de Pagamento", key="orc_pagamento", height=80)
 
-    st.divider()
     pdf_bytes_orc = gerar_pdf_orcamento()
-    nome_arq_orc = f"Orcamento_{st.session_state['orc_cliente'].replace(' ', '_') if st.session_state['orc_cliente'] else 'Geral'}_{datetime.now().strftime('%Y%m%d')}.pdf"
-    
-    st.download_button(
-        label="📄 GERAR, SALVAR NA PASTA DO CLIENTE E BAIXAR ORÇAMENTO PDF",
-        data=pdf_bytes_orc,
-        file_name=nome_arq_orc,
-        mime="application/pdf",
-        type="primary",
-        use_container_width=True
-    )
+    st.download_button("📄 GERAR E BAIXAR ORÇAMENTO PDF", data=pdf_bytes_orc, file_name=f"Orcamento_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf", type="primary", use_container_width=True)
 
-elif "🏢 Cadastro de Clientes & SDAI" in menu_admin:
+# 6. CADASTRO DE CLIENTES & SDAI (Do App 3)
+elif menu_admin == "🏢 Cadastro de Clientes & SDAI":
     st.header("🏢 Gestão de Clientes e Equipamentos SDAI")
-    tab_c1, tab_c2, tab_c3 = st.tabs([
-        "➕ Adicionar / Editar Cliente", 
-        "📋 Lista de Clientes Cadastrados", 
-        "📊 Importar / Exportar Planilha"
-    ])
+    tab_c1, tab_c2, tab_c3 = st.tabs(["➕ Adicionar / Editar Cliente", "📋 Lista de Clientes", "📊 Importar / Exportar Planilha"])
 
     with tab_c1:
         with st.form("form_cad_cliente"):
@@ -1020,9 +981,6 @@ elif "🏢 Cadastro de Clientes & SDAI" in menu_admin:
             c_zel_cad = st.text_input("Zelador")
             c_tel_cad = st.text_input("Telefone de Contato")
             c_email_cad = st.text_input("E-mail")
-            
-            st.markdown("---")
-            st.subheader("Configuração do SDAI do Cliente")
             c_csdai = st.text_input("Central SDAI (Modelo/Marca)")
             c_tsdai = st.text_input("Tipo de Central", value="SISTEMA ENDEREÇÁVEL")
             c_qlacos = st.text_input("Qtd. Laços / Zonas", value="01 LAÇO")
@@ -1044,145 +1002,83 @@ elif "🏢 Cadastro de Clientes & SDAI" in menu_admin:
                     }
                     salvar_json(CLIENTES_FILE, clientes_db)
                     st.success(f"✅ Cliente {c_nome_cad} salvo com sucesso!")
-                else:
-                    st.warning("O nome do cliente é obrigatório.")
 
     with tab_c2:
-        st.subheader("Clientes Cadastrados")
-        if not clientes_db:
-            st.info("Nenhum cliente cadastrado.")
-        else:
-            for cl_nome, cl_data in list(clientes_db.items()):
-                with st.expander(f"🏢 {cl_nome} (CNPJ: {cl_data.get('cnpj', '')})"):
-                    st.write(f"**Endereço:** {cl_data.get('endereco', '')} - {cl_data.get('cidade_uf', '')}")
-                    st.write(f"**Síndico:** {cl_data.get('sindico', '')} | **Zelador:** {cl_data.get('zelador', '')}")
-                    st.write(f"**Contato:** {cl_data.get('contato', '')} | **E-mail:** {cl_data.get('email', '')}")
-                    st.write(f"**Central SDAI:** {cl_data.get('central_sdai', '')} ({cl_data.get('tipo_central', '')})")
-                    if st.button(f"🗑️ Excluir Cliente", key=f"del_cli_{cl_nome}"):
-                        del clientes_db[cl_nome]
-                        salvar_json(CLIENTES_FILE, clientes_db)
-                        st.success(f"Cliente {cl_nome} excluído!")
-                        st.rerun()
+        for cl_nome, cl_data in list(clientes_db.items()):
+            with st.expander(f"🏢 {cl_nome} (CNPJ: {cl_data.get('cnpj', '')})"):
+                st.write(f"**Endereço:** {cl_data.get('endereco', '')} - {cl_data.get('cidade_uf', '')}")
+                if st.button(f"🗑️ Excluir Cliente", key=f"del_cli_{cl_nome}"):
+                    del clientes_db[cl_nome]
+                    salvar_json(CLIENTES_FILE, clientes_db)
+                    st.rerun()
 
     with tab_c3:
-        st.subheader("📊 Importar e Exportar Planilha de Clientes")
-        
-        st.write("### 📥 Baixar Planilha Cadastral (Separada por Colunas)")
-        st.info("Baixe a planilha estruturada para Excel/Google Planilhas (separada por colunas utilizando ponto e vírgula ';', pronta para visualização, edição e impressão).")
-        
         if clientes_db:
-            lista_para_df = []
-            for nome_cli, dados_cli in clientes_db.items():
-                lista_para_df.append(dados_cli)
-            df_clientes_export = pd.DataFrame(lista_para_df)
-            
+            df_clientes_export = pd.DataFrame(list(clientes_db.values()))
             csv_dados = df_clientes_export.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
-            st.download_button(
-                label="📥 Baixar Planilha em Colunas (CSV / Excel)",
-                data=csv_dados,
-                file_name=f"base_clientes_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-        else:
-            st.warning("Não há clientes cadastrados para exportar no momento.")
+            st.download_button("📥 Baixar Planilha em Colunas (CSV / Excel)", data=csv_dados, file_name=f"base_clientes_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
 
-        st.divider()
-
-        st.write("### 📤 Atualizar / Enviar Planilha de Clientes")
-        st.info("Envie um arquivo CSV atualizado para sincronizar com o sistema.")
-        
-        arquivo_upload_clientes = st.file_uploader("Escolha o arquivo CSV de clientes atualizado", type=["csv"], key="upload_clientes_csv")
-        
-        if arquivo_upload_clientes is not None:
-            if st.button("Confirmar e Sincronizar Base de Clientes", type="primary"):
-                try:
-                    try:
-                        df_novo_upload = pd.read_csv(arquivo_upload_clientes, sep=';')
-                        if len(df_novo_upload.columns) <= 1:
-                            arquivo_upload_clientes.seek(0)
-                            df_novo_upload = pd.read_csv(arquivo_upload_clientes, sep=',')
-                    except:
-                        arquivo_upload_clientes.seek(0)
-                        df_novo_upload = pd.read_csv(arquivo_upload_clientes)
-                    
-                    novo_db = {}
-                    for _, row in df_novo_upload.iterrows():
-                        nome_cliente = str(row.get("nome", ""))
-                        if nome_cliente and nome_cliente != "nan":
-                            novo_db[nome_cliente] = row.to_dict()
-                    
-                    clientes_db.clear()
-                    clientes_db.update(novo_db)
-                    salvar_json(CLIENTES_FILE, clientes_db)
-                    
-                    st.success("✅ Base de clientes atualizada e importada com sucesso!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao processar o arquivo enviado: {e}")
-
-elif "📂 Histórico & Pasta do Cliente" in menu_admin:
+# 7. HISTÓRICO & PASTA DO CLIENTE (Do App 3)
+elif menu_admin == "📂 Histórico & Pasta do Cliente":
     st.header("📂 Pasta Digital e Histórico Completo por Cliente")
-    st.info("Aqui ficam centralizados todos os relatórios gerados e chamados técnicos vinculados a cada cliente.")
-    
-    if not clientes_db:
-        st.info("Nenhum cliente cadastrado.")
-    else:
-        lista_nomes_hist = list(clientes_db.keys())
-        cliente_selecionado_hist = st.selectbox("Selecione o Cliente", lista_nomes_hist, key="hist_cli_select_main")
-        
+    if clientes_db:
+        cliente_selecionado_hist = st.selectbox("Selecione o Cliente", list(clientes_db.keys()))
         if cliente_selecionado_hist:
-            nome_pasta_cliente = "".join(c for c in cliente_selecionado_hist if c.isalnum() or c in (' ', '_', '-')).strip()
-            cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
+            nome_pasta = "".join(c for c in cliente_selecionado_hist if c.isalnum() or c in (' ', '_', '-')).strip()
+            cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta)
+            historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
             
-            c_info = clientes_db[cliente_selecionado_hist]
-            with st.expander("🏢 Informações Cadastrais e SDAI", expanded=False):
-                st.write(f"**CNPJ:** {c_info.get('cnpj', '')} | **Contato:** {c_info.get('contato', '')}")
-                st.write(f"**Endereço:** {c_info.get('endereco', '')} - {c_info.get('cidade_uf', '')}")
-                st.write(f"**Síndico:** {c_info.get('sindico', '')} | **Zelador:** {c_info.get('zelador', '')}")
-                st.write(f"**Central SDAI:** {c_info.get('central_sdai', '')} ({c_info.get('tipo_central', '')})")
+            if os.path.exists(historico_path):
+                atendimentos = json.load(open(historico_path, encoding="utf-8"))
+                for idx, at in enumerate(reversed(atendimentos)):
+                    st.markdown(f"**📌 [{at.get('tipo')}]** — *Data: {at.get('data')}*")
+                    if "arquivo_pdf" in at:
+                        caminho_pdf = os.path.join(cliente_dir, at['arquivo_pdf'])
+                        if os.path.exists(caminho_pdf):
+                            st.download_button(f"📥 Baixar PDF ({at['arquivo_pdf']})", data=open(caminho_pdf, "rb").read(), file_name=at['arquivo_pdf'], mime="application/pdf", key=f"hist_pdf_{idx}")
+                    st.divider()
 
-            st.divider()
-            st.write(f"### Atendimentos, Relatórios e Chamados de: {cliente_selecionado_hist}")
-            
-            if os.path.exists(cliente_dir):
-                historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
-                atendimentos = []
-                if os.path.exists(historico_path):
-                    try:
-                        with open(historico_path, "r", encoding="utf-8") as f:
-                            atendimentos = json.load(f)
-                    except:
-                        pass
-                
-                if atendimentos:
-                    for idx, at in enumerate(reversed(atendimentos)):
-                        tipo_item = at.get('tipo', 'Atendimento')
-                        st.markdown(f"**📌 [{tipo_item}]** — *Data: {at.get('data')}*")
-                        
-                        if "Relatório" in tipo_item or "Proposta" in tipo_item:
-                            st.write(f"Resp. Técnico: {at.get('resp_tecnico')}")
-                            caminho_pdf_salvo = os.path.join(cliente_dir, at.get('arquivo_pdf', ''))
-                            if os.path.exists(caminho_pdf_salvo):
-                                with open(caminho_pdf_salvo, "rb") as f_pdf_down:
-                                    st.download_button(
-                                        label=f"📥 Baixar Arquivo PDF Salvo ({at.get('data')})",
-                                        data=f_pdf_down.read(),
-                                        file_name=at.get('arquivo_pdf'),
-                                        mime="application/pdf",
-                                        key=f"down_hist_main_{nome_pasta_cliente}_{idx}"
-                                    )
-                        elif "Chamado" in tipo_item:
-                            st.write(f"**Problema:** {at.get('problema')}")
-                            st.write(f"**Status do Chamado:** {at.get('status')} | **Contato:** {at.get('contato')}")
-                        
-                        st.divider()
-                else:
-                    st.info("Nenhum registro de relatório ou chamado encontrado para este cliente.")
-            else:
-                st.info("Ainda não há histórico criado para este cliente.")
+# 8. GESTÃO DE CHAMADOS (Do App 3)
+elif menu_admin == "📋 Gestão de Chamados":
+    st.header("📋 Gestão de Chamados Técnicos")
+    for ch in reversed(chamados_db):
+        with st.expander(f"Chamado #{ch['id']} - {ch['cliente']} (Status: {ch['status']})"):
+            st.write(f"**Problema:** {ch['problema']}")
+            novo_status = st.selectbox("Status", ["Pendente", "Em Andamento", "Concluído", "Cancelado"], index=["Pendente", "Em Andamento", "Concluído", "Cancelado"].index(ch["status"]) if ch["status"] in ["Pendente", "Em Andamento", "Concluído", "Cancelado"] else 0, key=f"st_ch_{ch['id']}")
+            if st.button("Salvar Status", key=f"btn_st_{ch['id']}"):
+                ch["status"] = novo_status
+                salvar_json(CHAMADOS_FILE, chamados_db)
+                st.success("Status atualizado!")
+                st.rerun()
 
-elif "🏢 Dados da Minha Empresa" in menu_admin:
+# 9. BACKUP DIÁRIO DO SISTEMA (Do App 2)
+elif menu_admin == "💾 Backup Diário":
+    st.title("💾 Central de Backup do Sistema")
+    col_b1, col_b2 = st.columns(2)
+    with col_b1:
+        if st.button("Executar Backup Agora", type="primary"):
+            b_path = perform_backup()
+            if b_path:
+                st.success("Backup do banco SQLite gerado com sucesso!")
+                with open(b_path, "rb") as f:
+                    st.download_button("Baixar Arquivo de Backup (.db)", f, file_name=os.path.basename(b_path), mime="application/octet-stream")
+
+    st.divider()
+    st.subheader("Histórico de Backups SQLite Anteriores")
+    backup_dir = os.path.join(BASE_DIR, "backups")
+    if os.path.exists(backup_dir):
+        backups = os.listdir(backup_dir)
+        for b in sorted(backups, reverse=True):
+            b_full_path = os.path.join(backup_dir, b)
+            cols_bk = st.columns([3, 1])
+            with cols_bk[0]:
+                st.text(b)
+            with cols_bk[1]:
+                with open(b_full_path, "rb") as f:
+                    st.download_button("Baixar", f, file_name=b, key=f"down_bk_{b}")
+
+# 10. DADOS DA MINHA EMPRESA (Do App 3)
+elif menu_admin == "🏢 Dados da Minha Empresa":
     st.header("🏢 Configurações da Empresa Prestadora")
     with st.form("form_empresa"):
         e_nome = st.text_input("Nome da Empresa", value=empresa_db.get("nome", ""))
@@ -1192,79 +1088,28 @@ elif "🏢 Dados da Minha Empresa" in menu_admin:
         e_tel = st.text_input("Telefone", value=empresa_db.get("telefone", ""))
         e_email = st.text_input("E-mail", value=empresa_db.get("email", ""))
         e_resp = st.text_input("Responsável Técnico", value=empresa_db.get("resp_tecnico", ""))
-        
         logo_up = st.file_uploader("Logo da Empresa (PNG)", type=["png", "jpg", "jpeg"], key="uploader_logo")
 
         if st.form_submit_button("💾 Salvar Dados da Empresa"):
-            empresa_db["nome"] = e_nome
-            empresa_db["cnpj"] = e_cnpj
-            empresa_db["crea"] = e_crea
-            empresa_db["endereco"] = e_end
-            empresa_db["telefone"] = e_tel
-            empresa_db["email"] = e_email
-            empresa_db["resp_tecnico"] = e_resp
-            
+            empresa_db.update({"nome": e_nome, "cnpj": e_cnpj, "crea": e_crea, "endereco": e_end, "telefone": e_tel, "email": e_email, "resp_tecnico": e_resp})
             if logo_up:
                 with open(LOGO_PATH, "wb") as f:
                     f.write(logo_up.getbuffer())
-                empresa_db["logo_path"] = LOGO_PATH
-
             salvar_json(EMPRESA_FILE, empresa_db)
-            st.success("✅ Dados da empresa atualizados com sucesso!")
+            st.success("✅ Dados atualizados!")
             st.rerun()
 
-elif "📋 Chamados" in menu_admin:
-    st.header("📋 Gestão de Chamados Técnicos")
-    if not chamados_db:
-        st.info("Nenhum chamado registrado.")
-    else:
-        for ch in reversed(chamados_db):
-            with st.expander(f"Chamado #{ch['id']} - {ch['cliente']} (Status: {ch['status']})"):
-                st.write(f"**Contato:** {ch.get('contato', 'N/A')} | **E-mail:** {ch.get('email', 'N/A')}")
-                st.write(f"**Problema relatado:** {ch['problema']}")
-                if ch.get('anexo') and os.path.exists(ch['anexo']):
-                    st.image(ch['anexo'], width=300)
-                
-                novo_status = st.selectbox(
-                    "Atualizar Status",
-                    ["Pendente", "Em Andamento", "Concluído", "Cancelado"],
-                    index=["Pendente", "Em Andamento", "Concluído", "Cancelado"].index(ch["status"]) if ch["status"] in ["Pendente", "Em Andamento", "Concluído", "Cancelado"] else 0,
-                    key=f"status_ch_{ch['id']}"
-                )
-                
-                if st.button("💾 Atualizar Status do Chamado", key=f"btn_ch_{ch['id']}"):
-                    ch["status"] = novo_status
-                    salvar_json(CHAMADOS_FILE, chamados_db)
-                    
-                    registrar_historico_cliente(
-                        ch['cliente'],
-                        f"Chamado Técnico #{ch['id']}",
-                        {
-                            "problema": ch['problema'],
-                            "status": novo_status,
-                            "contato": ch.get('contato', '')
-                        }
-                    )
-                    
-                    st.success("Status atualizado e vinculado ao histórico do cliente!")
-                    st.rerun()
-                
-                if ch.get('feedback'):
-                    st.info(f"**Feedback do Cliente:** {ch['feedback']}")
-
-elif "👥 Gerenciar Usuários" in menu_admin:
+# 11. GERENCIAR USUÁRIOS (Do App 3)
+elif menu_admin == "👥 Gerenciar Usuários":
     st.header("👥 Gestão de Usuários e Acessos")
-    tab_u1, tab_u2 = st.tabs(["➕ Adicionar Usuário", "📋 Lista de Usuários"])
+    with st.form("form_novo_usuario"):
+        u_login = st.text_input("Login")
+        u_senha = st.text_input("Senha", type="password")
+        u_nome = st.text_input("Nome Completo")
+        u_perfil = st.selectbox("Perfil de Acesso", ["cliente", "master"])
 
-    with tab_u1:
-        with st.form("form_novo_usuario"):
-            u_login = st.text_input("Login / Nome de Usuário")
-            u_senha = st.text_input("Senha", type="password")
-            u_nome = st.text_input("Nome Completo / Empresa")
-            u_perfil = st.selectbox("Perfil de Acesso", ["cliente", "master"], key="select_perfil_novo")
-
-            if st.form_submit_button("💾 Cadastrar Usuário"):
-                if u_login and u_senha:
-                    usuarios[u_login] = {"senha": u_senha, "nome": u_nome, "perfil": u_perfil}
-                    salvar_json(USUARIOS_FILE, usuarios)
-                    st.success(f"✅ Usuário {u_login} cadastrado com sucesso!")
+        if st.form_submit_button("💾 Cadastrar Usuário"):
+            if u_login and u_senha:
+                usuarios[u_login] = {"senha": u_senha, "nome": u_nome, "perfil": u_perfil}
+                salvar_json(USUARIOS_FILE, usuarios)
+                st.success(f"✅ Usuário {u_login} cadastrado!")
