@@ -5,7 +5,7 @@ import os
 import shutil
 from datetime import datetime
 
-st.set_page_config(page_title="Eli Sistemas - Gestão, Vistorias e Agenda", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Eli Sistemas - Gestão Completa", page_icon="⚡", layout="wide")
 
 # Configuração do Banco de Dados SQLite
 DB_FILE = "eli_sistemas.db"
@@ -34,6 +34,17 @@ def init_db():
             status TEXT
         )
     ''')
+    # Tabela de Equipamentos / Quantidades
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS equipment (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client TEXT,
+            equipment_type TEXT,
+            quantity INTEGER,
+            location TEXT,
+            notes TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -50,14 +61,19 @@ def perform_backup():
         return backup_path
     return None
 
-# Menu lateral de navegação
+# Menu lateral de navegação unificado
 st.sidebar.markdown("### ⚡ Eli Sistemas")
 st.sidebar.caption("Sistemas de Alarme e Segurança contra Incêndio")
 st.sidebar.divider()
 
-menu = st.sidebar.selectbox("Navegação", ["📅 Agenda Principal", "📋 Relatórios e Vistorias", "💾 Backup Diário"])
+menu = st.sidebar.selectbox("Navegação", [
+    "📅 Agenda Principal", 
+    "📋 Relatórios e Vistorias", 
+    "🔧 Controle de Equipamentos / Preventiva", 
+    "💾 Backup Diário"
+])
 
-# Logotipo/Cabeçalho padrão para todos os relatórios impressos e gerados
+# Logotipo/Cabeçalho padrão para todos os relatórios, vistorias e agenda impressos
 LOGO_HTML = '''
 <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #b71c1c; padding-bottom: 10px; margin-bottom: 20px;">
     <div>
@@ -65,16 +81,18 @@ LOGO_HTML = '''
         <p style="margin: 0; font-size: 11px; color: #555;">Sistemas de Alarme, Detecção e Segurança contra Incêndio</p>
     </div>
     <div style="text-align: right; font-size: 11px; color: #666;">
-        <b>Relatório Técnico Oficial</b><br>
+        <b>Documento Técnico Oficial</b><br>
         Emissão: {}
     </div>
 </div>
 '''.format(datetime.now().strftime("%d/%m/%Y %H:%M"))
 
-# 1. PÁGINA DE AGENDA PRINCIPAL
+# ==========================================
+# 1. AGENDA PRINCIPAL
+# ==========================================
 if menu == "📅 Agenda Principal":
     st.title("📅 Agenda de Atividades")
-    st.write("Gerencie suas tarefas diárias, semanais e mensais com controle de status.")
+    st.write("Gerencie suas tarefas diárias, semanais e mensais com controle de status e opção de exportação em PDF.")
     
     with st.form("new_task_form", clear_on_submit=True):
         st.subheader("Cadastrar Nova Tarefa")
@@ -82,11 +100,11 @@ if menu == "📅 Agenda Principal":
         with col1:
             task_name = st.text_input("Descrição da Tarefa / Serviço")
         with col2:
-            category = st.selectbox("Período / Categoria", ["Diária", "Semanal", "Mensal"])
+            category = st.selectbox("Categoria", ["Diária", "Semanal", "Mensal"])
         with col3:
             due_date = st.date_input("Data Alvo", value=datetime.today())
             
-        submitted = st.form_submit_button("Cadastrar na Agenda")
+        submitted = st.form_submit_button("Cadastrar Tarefa")
         if submitted and task_name:
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
@@ -98,21 +116,22 @@ if menu == "📅 Agenda Principal":
             st.rerun()
 
     st.divider()
-    st.subheader("Gerenciamento de Tarefas")
+    st.subheader("Lista de Tarefas da Agenda")
     
     conn = sqlite3.connect(DB_FILE)
     df_agenda = pd.read_sql("SELECT * FROM agenda ORDER BY due_date ASC", conn)
     conn.close()
     
     if not df_agenda.empty:
-        filter_cat = st.selectbox("Filtrar por Período", ["Todas", "Diária", "Semanal", "Mensal"])
+        filter_cat = st.selectbox("Filtrar por Categoria", ["Todas", "Diária", "Semanal", "Mensal"])
+        filtered_df = df_agenda.copy()
         if filter_cat != "Todas":
-            df_agenda = df_agenda[df_agenda["category"] == filter_cat]
+            filtered_df = filtered_df[filtered_df["category"] == filter_cat]
             
-        for index, row in df_agenda.iterrows():
+        for index, row in filtered_df.iterrows():
             cols = st.columns([3, 1, 1, 1])
             with cols[0]:
-                st.markdown(f"**{row['task']}**<br><small style='color:gray;'>Período: {row['category']} | Data: {row['due_date']}</small>", unsafe_allow_html=True)
+                st.markdown(f"**{row['task']}**<br><small style='color:gray;'>Cat: {row['category']} | Data: {row['due_date']}</small>", unsafe_allow_html=True)
             with cols[1]:
                 status_color = "green" if row['status'] == "Realizado" else "orange"
                 st.markdown(f"<span style='color:{status_color}; font-weight:bold;'>● {row['status']}</span>", unsafe_allow_html=True)
@@ -134,17 +153,65 @@ if menu == "📅 Agenda Principal":
                     conn.commit()
                     conn.close()
                     st.rerun()
+        
+        st.divider()
+        st.subheader("🖨️ Exportar / Imprimir Agenda Completa em PDF")
+        agenda_html = f'''
+        <div style="border: 1px solid #ccc; padding: 25px; border-radius: 8px; background: white; color: black; font-family: Arial, sans-serif;">
+            {LOGO_HTML}
+            <h3 style="color: #222; margin-bottom: 5px;">Relatório de Agenda ({filter_cat})</h3>
+            <p style="margin: 4px 0; color: #555;">Emitido em: {datetime.now().strftime("%d/%m/%Y %H:%M")}</p>
+            <hr style="border:0; border-top:1px solid #ddd; margin: 15px 0;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                <thead>
+                    <tr style="background-color: #f2f2f2; border-bottom: 2px solid #ddd;">
+                        <th style="padding: 8px; text-align: left;">Tarefa</th>
+                        <th style="padding: 8px; text-align: left;">Categoria</th>
+                        <th style="padding: 8px; text-align: left;">Data</th>
+                        <th style="padding: 8px; text-align: left;">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+        '''
+        for _, r in filtered_df.iterrows():
+            status_style = "color: green; font-weight: bold;" if r['status'] == "Realizado" else "color: #d97706; font-weight: bold;"
+            agenda_html += f'''
+                <tr style="border-bottom: 1px solid #eee;">
+                    <td style="padding: 8px;">{r['task']}</td>
+                    <td style="padding: 8px;">{r['category']}</td>
+                    <td style="padding: 8px;">{r['due_date']}</td>
+                    <td style="padding: 8px;"><span style="{status_style}">{r['status']}</span></td>
+                </tr>
+            '''
+        agenda_html += '''
+                </tbody>
+            </table>
+            <br><br>
+            <div style="margin-top: 40px; font-size: 12px; text-align: center;">
+                ____________________________________________<br>Eli Sistemas - Controle Técnico e Operacional
+            </div>
+        </div>
+        '''
+        st.markdown(agenda_html, unsafe_allow_html=True)
+        st.download_button(
+            "📥 Baixar Agenda em Formato PDF / HTML", 
+            data=agenda_html, 
+            file_name=f"agenda_eli_sistemas_{datetime.now().strftime('%Y%m%d')}.html", 
+            mime="text/html"
+        )
     else:
-        st.info("Nenhuma tarefa cadastrada no momento.")
+        st.info("Nenhuma tarefa cadastrada na agenda.")
 
-# 2. PÁGINA DE RELATÓRIOS E VISTORIAS
+# ==========================================
+# 2. RELATÓRIOS E VISTORIAS
+# ==========================================
 elif menu == "📋 Relatórios e Vistorias":
     st.title("📋 Emissão de Relatórios e Vistorias")
     st.write("Todos os relatórios impressos ou gerados contêm o logotipo oficial da Eli Sistemas.")
     
     with st.form("report_form", clear_on_submit=True):
         st.subheader("Novo Relatório / Vistoria")
-        rep_title = st.text_input("Título do Relatório (ex: Relatório de Manutenção Preventiva - Alarme)")
+        rep_title = st.text_input("Título do Relatório (ex: Relatório de Vistoria de Alarme)")
         client = st.text_input("Cliente / Local da Obra")
         rep_type = st.selectbox("Tipo de Documento", ["Vistoria Técnica", "Manutenção Preventiva", "Auditoria de Sinalização"])
         content = st.text_area("Descrição Técnica, Equipamentos e Conclusão")
@@ -189,17 +256,63 @@ elif menu == "📋 Relatórios e Vistorias":
     else:
         st.info("Nenhum relatório emitido até o momento.")
 
-# 3. PÁGINA DE BACKUP DIÁRIO
+# ==========================================
+# 3. CONTROLE DE EQUIPAMENTOS / PREVENTIVA
+# ==========================================
+elif menu == "🔧 Controle de Equipamentos / Preventiva":
+    st.title("🔧 Controle de Equipamentos e Quantidades")
+    st.write("Gerencie os equipamentos e quantidades instalados para controle de vistorias e manutenções.")
+    
+    with st.form("eq_form", clear_on_submit=True):
+        st.subheader("Cadastrar Equipamento / Quantidade")
+        eq_client = st.text_input("Cliente / Obra")
+        eq_type = st.selectbox("Tipo de Equipamento", [
+            "Central de Alarme de Incêndio", 
+            "Detector de Fumaça / Térmico", 
+            "Acionador Manual (Botoeira)", 
+            "Sinalizador Audiovisual (Sirene/Strobe)", 
+            "Placa Fotoluminescente (Sinalização)",
+            "Eletroímã de Porta / Retenedor",
+            "Outro"
+        ])
+        eq_qty = st.number_input("Quantidade Total", min_value=1, value=1)
+        eq_loc = st.text_input("Localização / Pavimento / Setor")
+        eq_notes = st.text_area("Observações Técnicas")
+        
+        eq_submit = st.form_submit_button("Salvar Equipamento")
+        if eq_submit and eq_client:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO equipment (client, equipment_type, quantity, location, notes) VALUES (?, ?, ?, ?, ?)",
+                           (eq_client, eq_type, eq_qty, eq_loc, eq_notes))
+            conn.commit()
+            conn.close()
+            st.success("Equipamento cadastrado com sucesso!")
+
+    st.divider()
+    st.subheader("Equipamentos Cadastrados")
+    conn = sqlite3.connect(DB_FILE)
+    df_eq = pd.read_sql("SELECT * FROM equipment ORDER BY id DESC", conn)
+    conn.close()
+    
+    if not df_eq.empty:
+        st.dataframe(df_eq, use_container_width=True)
+    else:
+        st.info("Nenhum equipamento cadastrado.")
+
+# ==========================================
+# 4. BACKUP DIÁRIO
+# ==========================================
 elif menu == "💾 Backup Diário":
     st.title("💾 Central de Backup do Sistema")
-    st.write("Realize cópias de segurança imediatas ou configure a preservação dos dados salvos no aplicativo.")
+    st.write("Faça o backup imediato ou configure cópias de segurança de todo o banco de dados do aplicativo.")
     
     col_b1, col_b2 = st.columns(2)
     with col_b1:
         if st.button("Executar Backup Agora", type="primary"):
             b_path = perform_backup()
             if b_path:
-                st.success(f"Backup gerado com sucesso!")
+                st.success("Backup gerado com sucesso!")
                 with open(b_path, "rb") as f:
                     st.download_button("Baixar Arquivo de Backup (.db)", f, file_name=os.path.basename(b_path), mime="application/octet-stream")
             else:
