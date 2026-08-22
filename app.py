@@ -17,8 +17,10 @@ CHAMADOS_FILE = os.path.join(BASE_DIR, "chamados.json")
 USUARIOS_FILE = os.path.join(BASE_DIR, "usuarios.json")
 LOGO_PATH = os.path.join(BASE_DIR, "logo_empresa.png")
 PASTA_FOTOS_VISTORIA = os.path.join(BASE_DIR, "fotos_vistoria")
+HISTORICO_CLIENTES_DIR = os.path.join(BASE_DIR, "historico_clientes")
 
 os.makedirs(PASTA_FOTOS_VISTORIA, exist_ok=True)
+os.makedirs(HISTORICO_CLIENTES_DIR, exist_ok=True)
 
 @st.cache_data
 def carregar_json_cached(path):
@@ -38,6 +40,33 @@ def salvar_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
     carregar_json_cached.clear()
+
+def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict):
+    """Função unificada para salvar qualquer evento/relatório/chamado na pasta do cliente."""
+    if not nome_cliente:
+        return
+    nome_pasta_cliente = "".join(c for c in nome_cliente.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
+    if not nome_pasta_cliente:
+        return
+        
+    cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
+    os.makedirs(cliente_dir, exist_ok=True)
+    
+    historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
+    historico_lista = []
+    if os.path.exists(historico_path):
+        try:
+            with open(historico_path, "r", encoding="utf-8") as f_hist:
+                historico_lista = json.load(f_hist)
+        except:
+            pass
+            
+        detalhes_dict["data"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        detalhes_dict["tipo"] = tipo_acao
+        historico_lista.append(detalhes_dict)
+        
+        with open(historico_path, "w", encoding="utf-8") as f_hist:
+            json.dump(historico_lista, f_hist, ensure_ascii=False, indent=4)
 
 # Carregamento inicial de dados
 clientes_db = carregar_json(CLIENTES_FILE, {})
@@ -232,7 +261,33 @@ def gerar_pdf_preventiva():
 
     doc.build(story)
     buffer.seek(0)
-    return buffer.getvalue()
+    pdf_data = buffer.getvalue()
+
+    # SALVAR AUTOMATICAMENTE NA PASTA DO CLIENTE
+    nome_cliente_atual = st.session_state.get('cliente', '').strip()
+    if nome_cliente_atual:
+        nome_pasta_cliente = "".join(c for c in nome_cliente_atual if c.isalnum() or c in (' ', '_', '-')).strip()
+        cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
+        os.makedirs(cliente_dir, exist_ok=True)
+        
+        data_hora_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+        nome_arq_pdf = f"Relatorio_Preventiva_{data_hora_str}.pdf"
+        caminho_completo_pdf = os.path.join(cliente_dir, nome_arq_pdf)
+        
+        with open(caminho_completo_pdf, "wb") as f_pdf:
+            f_pdf.write(pdf_data)
+            
+        registrar_historico_cliente(
+            nome_cliente_atual,
+            "Relatório de Vistoria Preventiva",
+            {
+                "arquivo_pdf": nome_arq_pdf,
+                "status_geral": st.session_state.get('status_geral', ''),
+                "resp_tecnico": st.session_state.get('resp_tecnico', '')
+            }
+        )
+
+    return pdf_data
 
 
 st.set_page_config(page_title="SDAI - Gestão & Inspeção Técnica", layout="wide")
@@ -299,6 +354,7 @@ menu_admin = st.sidebar.radio(
     [
         "📋 Vistoria & Relatório Técnico",
         "🏢 Cadastro de Clientes & SDAI",
+        "📂 Histórico & Pasta do Cliente",
         "🏢 Dados da Minha Empresa",
         "📋 Chamados",
         "👥 Gerenciar Usuários"
@@ -482,7 +538,7 @@ if "📋 Vistoria & Relatório Técnico" in menu_admin:
     nome_arquivo_pdf = f"Relatorio_SDAI_{st.session_state['cliente'].replace(' ', '_') if st.session_state['cliente'] else 'Geral'}_{datetime.now().strftime('%Y%m%d')}.pdf"
     
     st.download_button(
-        label="📄 GERAR E BAIXAR RELATÓRIO PDF NBR 17240",
+        label="📄 GERAR, SALVAR NA PASTA E BAIXAR RELATÓRIO PDF",
         data=pdf_bytes,
         file_name=nome_arquivo_pdf,
         mime="application/pdf",
@@ -492,7 +548,11 @@ if "📋 Vistoria & Relatório Técnico" in menu_admin:
 
 elif "🏢 Cadastro de Clientes & SDAI" in menu_admin:
     st.header("🏢 Gestão de Clientes e Equipamentos SDAI")
-    tab_c1, tab_c2, tab_c3 = st.tabs(["➕ Adicionar / Editar Cliente", "📋 Lista de Clientes Cadastrados", "📊 Importar / Exportar Planilha"])
+    tab_c1, tab_c2, tab_c3 = st.tabs([
+        "➕ Adicionar / Editar Cliente", 
+        "📋 Lista de Clientes Cadastrados", 
+        "📊 Importar / Exportar Planilha"
+    ])
 
     with tab_c1:
         with st.form("form_cad_cliente"):
@@ -551,9 +611,8 @@ elif "🏢 Cadastro de Clientes & SDAI" in menu_admin:
     with tab_c3:
         st.subheader("📊 Importar e Exportar Planilha de Clientes")
         
-        # Seção de Download da Planilha Atual
-        st.write("### 📥 Baixar Planilha Cadastral")
-        st.info("Baixe todos os dados dos clientes cadastrados em formato de planilha (CSV) para editar no Excel ou Google Planilhas.")
+        st.write("### 📥 Baixar Planilha Cadastral (Separada por Colunas)")
+        st.info("Baixe a planilha estruturada para Excel/Google Planilhas (separada por colunas utilizando ponto e vírgula ';', pronta para visualização, edição e impressão).")
         
         if clientes_db:
             lista_para_df = []
@@ -561,9 +620,10 @@ elif "🏢 Cadastro de Clientes & SDAI" in menu_admin:
                 lista_para_df.append(dados_cli)
             df_clientes_export = pd.DataFrame(lista_para_df)
             
-            csv_dados = df_clientes_export.to_csv(index=False).encode('utf-8')
+            # Utiliza sep=';' para abrir perfeitamente dividido em colunas no Excel em português
+            csv_dados = df_clientes_export.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
             st.download_button(
-                label="📥 Baixar Planilha de Clientes (CSV)",
+                label="📥 Baixar Planilha em Colunas (CSV / Excel)",
                 data=csv_dados,
                 file_name=f"base_clientes_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv",
@@ -574,16 +634,23 @@ elif "🏢 Cadastro de Clientes & SDAI" in menu_admin:
 
         st.divider()
 
-        # Seção de Upload (Atualização da Planilha)
         st.write("### 📤 Atualizar / Enviar Planilha de Clientes")
-        st.info("Envie um arquivo CSV atualizado contendo os cadastros de clientes para sincronizar com o sistema.")
+        st.info("Envie um arquivo CSV atualizado para sincronizar com o sistema.")
         
         arquivo_upload_clientes = st.file_uploader("Escolha o arquivo CSV de clientes atualizado", type=["csv"], key="upload_clientes_csv")
         
         if arquivo_upload_clientes is not None:
             if st.button("Confirmar e Sincronizar Base de Clientes", type="primary"):
                 try:
-                    df_novo_upload = pd.read_csv(arquivo_upload_clientes)
+                    # Tenta ler considerando separador por vírgula ou ponto e vírgula
+                    try:
+                        df_novo_upload = pd.read_csv(arquivo_upload_clientes, sep=';')
+                        if len(df_novo_upload.columns) <= 1:
+                            arquivo_upload_clientes.seek(0)
+                            df_novo_upload = pd.read_csv(arquivo_upload_clientes, sep=',')
+                    except:
+                        arquivo_upload_clientes.seek(0)
+                        df_novo_upload = pd.read_csv(arquivo_upload_clientes)
                     
                     novo_db = {}
                     for _, row in df_novo_upload.iterrows():
@@ -599,6 +666,68 @@ elif "🏢 Cadastro de Clientes & SDAI" in menu_admin:
                     st.rerun()
                 except Exception as e:
                     st.error(f"Erro ao processar o arquivo enviado: {e}")
+
+elif "📂 Histórico & Pasta do Cliente" in menu_admin:
+    st.header("📂 Pasta Digital e Histórico Completo por Cliente")
+    st.info("Aqui ficam centralizados todos os relatórios gerados e chamados técnicos vinculados a cada cliente.")
+    
+    if not clientes_db:
+        st.info("Nenhum cliente cadastrado.")
+    else:
+        lista_nomes_hist = list(clientes_db.keys())
+        cliente_selecionado_hist = st.selectbox("Selecione o Cliente", lista_nomes_hist, key="hist_cli_select_main")
+        
+        if cliente_selecionado_hist:
+            nome_pasta_cliente = "".join(c for c in cliente_selecionado_hist if c.isalnum() or c in (' ', '_', '-')).strip()
+            cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
+            
+            # Dados cadastrais rápidos do cliente
+            c_info = clientes_db[cliente_selecionado_hist]
+            with st.expander("🏢 Informações Cadastrais e SDAI", expanded=False):
+                st.write(f"**CNPJ:** {c_info.get('cnpj', '')} | **Contato:** {c_info.get('contato', '')}")
+                st.write(f"**Endereço:** {c_info.get('endereco', '')} - {c_info.get('cidade_uf', '')}")
+                st.write(f"**Síndico:** {c_info.get('sindico', '')} | **Zelador:** {c_info.get('zelador', '')}")
+                st.write(f"**Central SDAI:** {c_info.get('central_sdai', '')} ({c_info.get('tipo_central', '')})")
+
+            st.divider()
+            st.write(f"### Atendimentos, Relatórios e Chamados de: {cliente_selecionado_hist}")
+            
+            if os.path.exists(cliente_dir):
+                historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
+                atendimentos = []
+                if os.path.exists(historico_path):
+                    try:
+                        with open(historico_path, "r", encoding="utf-8") as f:
+                            atendimentos = json.load(f)
+                    except:
+                        pass
+                
+                if atendimentos:
+                    for idx, at in enumerate(reversed(atendimentos)):
+                        tipo_item = at.get('tipo', 'Atendimento')
+                        st.markdown(f"**📌 [{tipo_item}]** — *Data: {at.get('data')}*")
+                        
+                        if "Relatório" in tipo_item:
+                            st.write(f"Status Geral: {at.get('status_geral')} | Resp. Técnico: {at.get('resp_tecnico')}")
+                            caminho_pdf_salvo = os.path.join(cliente_dir, at.get('arquivo_pdf', ''))
+                            if os.path.exists(caminho_pdf_salvo):
+                                with open(caminho_pdf_salvo, "rb") as f_pdf_down:
+                                    st.download_button(
+                                        label=f"📥 Baixar Relatório PDF Salvo ({at.get('data')})",
+                                        data=f_pdf_down.read(),
+                                        file_name=at.get('arquivo_pdf'),
+                                        mime="application/pdf",
+                                        key=f"down_hist_main_{nome_pasta_cliente}_{idx}"
+                                    )
+                        elif "Chamado" in tipo_item:
+                            st.write(f"**Problema:** {at.get('problema')}")
+                            st.write(f"**Status do Chamado:** {at.get('status')} | **Contato:** {at.get('contato')}")
+                        
+                        st.divider()
+                else:
+                    st.info("Nenhum registro de relatório ou chamado encontrado para este cliente.")
+            else:
+                st.info("Ainda não há histórico criado para este cliente.")
 
 elif "🏢 Dados da Minha Empresa" in menu_admin:
     st.header("🏢 Configurações da Empresa Prestadora")
@@ -653,7 +782,19 @@ elif "📋 Chamados" in menu_admin:
                 if st.button("💾 Atualizar Status do Chamado", key=f"btn_ch_{ch['id']}"):
                     ch["status"] = novo_status
                     salvar_json(CHAMADOS_FILE, chamados_db)
-                    st.success("Status atualizado!")
+                    
+                    # Registra a atualização também no histórico do cliente correspondente
+                    registrar_historico_cliente(
+                        ch['cliente'],
+                        f"Chamado Técnico #{ch['id']}",
+                        {
+                            "problema": ch['problema'],
+                            "status": novo_status,
+                            "contato": ch.get('contato', '')
+                        }
+                    )
+                    
+                    st.success("Status atualizado e vinculado ao histórico do cliente!")
                     st.rerun()
                 
                 if ch.get('feedback'):
