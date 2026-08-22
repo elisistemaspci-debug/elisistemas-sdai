@@ -659,10 +659,49 @@ elif menu == "📂 Histórico & Pasta do Cliente":
             if os.path.exists(historico_path):
                 with open(historico_path, "r", encoding="utf-8") as f:
                     hist = json.load(f)
-                for item in reversed(hist):
-                    st.markdown(f"**[{item.get('tipo')}]** - Data: {item.get('data')}")
-                    st.json(item)
-                    st.divider()
+                
+                if not hist:
+                    st.info("Nenhum histórico registrado para este cliente.")
+                else:
+                    for item in reversed(hist):
+                        tipo = item.get('tipo', 'Atendimento')
+                        data_hist = item.get('data', 'N/A')
+                        
+                        with st.expander(f"📌 {tipo} - Data: {data_hist}"):
+                            # Se for atualização ou abertura de chamado
+                            if "Chamado" in tipo:
+                                if item.get("status"):
+                                    st.markdown(f"**Status:** `{item.get('status')}`")
+                                if item.get("solicitante"):
+                                    st.markdown(f"**Solicitante:** {item.get('solicitante')}")
+                                if item.get("problema"):
+                                    st.markdown(f"**Descrição da Ocorrência:** {item.get('problema')}")
+                                if item.get("historico"):
+                                    st.info(f"**🛠️ Histórico / Andamento:**\n\n{item.get('historico')}")
+                                if item.get("conclusao"):
+                                    st.success(f"**✅ Conclusão Técnica:**\n\n{item.get('conclusao')}")
+                            
+                            # Se for relatório de vistoria
+                            elif "Relatório" in tipo:
+                                st.markdown(f"**Técnico Resp.:** {item.get('resp_tecnico', 'N/A')}")
+                                st.markdown(f"**Status Geral:** {item.get('status_geral', 'N/A')}")
+                                arq = item.get("arquivo_pdf")
+                                if arq:
+                                    caminho_pdf = os.path.join(cliente_dir, arq)
+                                    if os.path.exists(caminho_pdf):
+                                        with open(caminho_pdf, "rb") as f_pdf:
+                                            st.download_button(
+                                                f"📄 Baixar {arq}",
+                                                f_pdf,
+                                                file_name=arq,
+                                                mime="application/pdf",
+                                                key=f"btn_hist_{arq}_{data_hist}"
+                                            )
+                            # Caso genérico
+                            else:
+                                for k, v in item.items():
+                                    if k not in ["tipo", "data"]:
+                                        st.write(f"**{k.capitalize()}:** {v}")
 
 elif menu == "🏢 Dados da Minha Empresa":
     st.header("🏢 Configurações da Empresa Prestadora")
