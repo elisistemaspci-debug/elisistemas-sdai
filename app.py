@@ -420,6 +420,8 @@ if menu == "📞 Abertura e Acompanhamento de Chamados":
                             "problema": descricao_prob,
                             "anexo": caminho_foto,
                             "status": "Pendente",
+                            "historico_atendimento": "",
+                            "conclusao_tecnica": "",
                             "data_abertura": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         }
                         chamados_db.append(novo_chamado)
@@ -447,6 +449,11 @@ if menu == "📞 Abertura e Acompanhamento de Chamados":
                         st.write(f"**Descrição da Ocorrência:** {ch['problema']}")
                         if ch.get("anexo") and os.path.exists(ch["anexo"]):
                             st.image(ch["anexo"], width=300)
+                            
+                        if ch.get("historico_atendimento"):
+                            st.info(f"**🛠️ Histórico/Andamento Técnico:**\n\n{ch['historico_atendimento']}")
+                        if ch.get("conclusao_tecnica"):
+                            st.success(f"**✅ Parecer / Conclusão Técnica Final:**\n\n{ch['conclusao_tecnica']}")
 
 # ==============================================================================
 # PERFIL MASTER (ADMINISTRADOR)
@@ -586,22 +593,58 @@ elif menu == "🏢 Cadastro de Clientes & SDAI":
                 st.rerun()
 
 elif menu == "📞 Gestão de Chamados":
-    st.header("📞 Chamados Técnicos Recebidos")
+    st.header("📞 Gestão e Acompanhamento de Chamados Técnicos")
     if not chamados_db:
-        st.info("Nenhum chamado pendente.")
+        st.info("Nenhum chamado registrado.")
     else:
         for ch in reversed(chamados_db):
             with st.expander(f"Chamado #{ch['id']} - {ch['cliente']} (Status: {ch['status']})"):
-                st.write(f"**Solicitante:** {ch.get('solicitante', 'N/A')} | **Contato:** {ch.get('contato', 'N/A')}")
-                st.write(f"**Descrição:** {ch['problema']}")
+                st.write(f"**Solicitante:** {ch.get('solicitante', 'N/A')} | **Contato:** {ch.get('contato', 'N/A')} | **Data Abertura:** {ch.get('data_abertura', 'N/A')}")
+                st.write(f"**Descrição do Problema:** {ch['problema']}")
                 if ch.get("anexo") and os.path.exists(ch["anexo"]):
                     st.image(ch["anexo"], width=300)
                 
-                novo_status = st.selectbox("Atualizar Status", ["Pendente", "Em Andamento", "Concluído", "Cancelado"], index=["Pendente", "Em Andamento", "Concluído", "Cancelado"].index(ch["status"]) if ch["status"] in ["Pendente", "Em Andamento", "Concluído", "Cancelado"] else 0, key=f"status_adm_{ch['id']}")
-                if st.button("💾 Salvar Novo Status", key=f"btn_adm_ch_{ch['id']}"):
+                st.divider()
+                st.markdown("### 🛠️ Acompanhamento e Parecer Técnico")
+                
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    status_opcoes = ["Pendente", "Em Andamento", "Concluído", "Cancelado"]
+                    idx_stat = status_opcoes.index(ch["status"]) if ch["status"] in status_opcoes else 0
+                    novo_status = st.selectbox("Status do Chamado", status_opcoes, index=idx_stat, key=f"status_adm_{ch['id']}")
+                
+                hist_atual = st.text_area(
+                    "Histórico de Ações em Andamento (visível ao cliente)", 
+                    value=ch.get("historico_atendimento", ""), 
+                    height=100, 
+                    key=f"hist_{ch['id']}",
+                    help="Ex: 'Técnico deslocado em 10/05', 'Substituída fonte da central', etc."
+                )
+                
+                conclusao_atual = st.text_area(
+                    "Texto Final / Conclusão Técnica do Atendimento", 
+                    value=ch.get("conclusao_tecnica", ""), 
+                    height=100, 
+                    key=f"concl_{ch['id']}",
+                    help="Parecer conclusivo do técnico referente ao encerramento/solução do problema."
+                )
+                
+                if st.button("💾 Atualizar Chamado", key=f"btn_salvar_ch_{ch['id']}"):
                     ch["status"] = novo_status
+                    ch["historico_atendimento"] = hist_atual
+                    ch["conclusao_tecnica"] = conclusao_atual
                     salvar_json(CHAMADOS_FILE, chamados_db)
-                    st.success("Status atualizado!")
+                    
+                    registrar_historico_cliente(
+                        ch['cliente'],
+                        f"Atualização Chamado #{ch['id']}",
+                        {
+                            "status": novo_status,
+                            "historico": hist_atual,
+                            "conclusao": conclusao_atual
+                        }
+                    )
+                    st.success(f"Chamado #{ch['id']} atualizado com sucesso!")
                     st.rerun()
 
 elif menu == "📂 Histórico & Pasta do Cliente":
@@ -637,17 +680,17 @@ elif menu == "🏢 Dados da Minha Empresa":
 
 elif menu == "👥 Gerenciar Usuários":
     st.header("👥 Gestão de Usuários e Vínculos com Clientes")
-    tab_u1, tab_u2 = st.tabs(["➕ Novo Usuário", "📋 Usuários Cadastrados"])
+    tab_u1, tab_u2, tab_u3 = st.tabs(["➕ Novo Usuário", "✏️ Vincular / Editar Usuário", "📋 Usuários Cadastrados"])
     
+    lista_cli_vinculo = ["-- Nenhum / Administrador --"] + list(clientes_db.keys())
+
     with tab_u1:
         with st.form("form_novo_usuario"):
             u_login = st.text_input("Login de Acesso")
             u_senha = st.text_input("Senha", type="password")
             u_nome = st.text_input("Nome do Usuário / Responsável")
             u_perfil = st.selectbox("Perfil de Acesso", ["cliente", "master"])
-            
-            lista_cli_vinculo = ["-- Nenhum / Administrador --"] + list(clientes_db.keys())
-            u_vinculo = st.selectbox("Vincular ao Cliente/Condomínio (Para Perfil Cliente)", lista_cli_vinculo)
+            u_vinculo = st.selectbox("Vincular ao Cliente/Condomínio", lista_cli_vinculo, key="cad_vinc")
             
             if st.form_submit_button("💾 Cadastrar Usuário"):
                 if u_login and u_senha:
@@ -663,9 +706,33 @@ elif menu == "👥 Gerenciar Usuários":
                     st.rerun()
 
     with tab_u2:
-        st.subheader("Lista de Usuários")
+        st.subheader("Editar Vínculo e Perfil de Usuário Existente")
+        usr_sel = st.selectbox("Selecione o Usuário para Alterar", list(usuarios.keys()))
+        if usr_sel:
+            dados_u = usuarios[usr_sel]
+            with st.form("form_edit_usuario"):
+                edit_nome = st.text_input("Nome do Usuário", value=dados_u.get("nome", ""))
+                edit_senha = st.text_input("Senha", value=dados_u.get("senha", ""), type="password")
+                edit_perfil = st.selectbox("Perfil", ["cliente", "master"], index=0 if dados_u.get("perfil") == "cliente" else 1)
+                
+                cli_atual = dados_u.get("cliente_vinculado", "")
+                idx_vinc = lista_cli_vinculo.index(cli_atual) if cli_atual in lista_cli_vinculo else 0
+                edit_vinc = st.selectbox("Cliente/Condomínio Vinculado", lista_cli_vinculo, index=idx_vinc)
+                
+                if st.form_submit_button("💾 Salvar Alterações no Usuário"):
+                    cli_vinc_salvar = edit_vinc if edit_vinc != "-- Nenhum / Administrador --" else ""
+                    usuarios[usr_sel]["nome"] = edit_nome
+                    usuarios[usr_sel]["senha"] = edit_senha
+                    usuarios[usr_sel]["perfil"] = edit_perfil
+                    usuarios[usr_sel]["cliente_vinculado"] = cli_vinc_salvar
+                    salvar_json(USUARIOS_FILE, usuarios)
+                    st.success(f"✅ Alterações salvas para o usuário {usr_sel}!")
+                    st.rerun()
+
+    with tab_u3:
+        st.subheader("Lista de Usuários Cadastrados")
         for u, d in usuarios.items():
-            st.markdown(f"**Login:** {u} | **Nome:** {d.get('nome')} | **Perfil:** `{d.get('perfil')}` | **Cliente Vinculado:** {d.get('cliente_vinculado', 'Nenhum')}")
+            st.markdown(f"**Login:** `{u}` | **Nome:** {d.get('nome')} | **Perfil:** `{d.get('perfil')}` | **Cliente Vinculado:** {d.get('cliente_vinculado') if d.get('cliente_vinculado') else 'Nenhum (Master)'}")
             st.divider()
 
 elif menu == "💾 Backup Diário":
