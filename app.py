@@ -30,7 +30,7 @@ os.makedirs(PASTA_FOTOS_VISTORIA, exist_ok=True)
 os.makedirs(HISTORICO_CLIENTES_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
-# --- INICIALIZAÇÃO DO BANCO SQLITE (AGENDA E RELATÓRIOS) ---
+# --- INICIALIZAÇÃO DO BANCO SQLITE ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -68,7 +68,7 @@ def perform_backup():
 
 def restaurar_backup(uploaded_file):
     if uploaded_file is not None:
-        perform_backup() # Faz backup preventivo do atual antes de sobrescrever
+        perform_backup()
         with open(DB_FILE, "wb") as f:
             f.write(uploaded_file.getbuffer())
         return True
@@ -194,7 +194,7 @@ if not st.session_state["logged_in"]:
                 st.error("Usuário ou senha incorretos.")
     st.stop()
 
-# --- FUNÇÃO PARA GERAR PDF EM FORMATO DE CALENDÁRIO ---
+# --- GERADOR DE PDF CALENDÁRIO ---
 def gerar_pdf_calendario(ano=None, mes=None, incluir_tudo=False):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -280,7 +280,6 @@ def gerar_pdf_calendario(ano=None, mes=None, incluir_tudo=False):
         t_cal.setStyle(TableStyle(estilo_tabela))
         story.append(t_cal)
     else:
-        # Layout em Tabela Lista para Histórico Completo
         dados_tabela = [[
             Paragraph("<b>Data Alvo</b>", style_cab_dia),
             Paragraph("<b>Descrição da Tarefa</b>", style_cab_dia),
@@ -307,7 +306,7 @@ def gerar_pdf_calendario(ano=None, mes=None, incluir_tudo=False):
     buffer.seek(0)
     return buffer.getvalue()
 
-# --- MÉRITO GERADOR DE PDFS DE VISTORIA (REPORTLAB) ---
+# --- GERADOR DE PDF VISTORIA PREVENTIVA ---
 def gerar_pdf_preventiva():
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -476,7 +475,7 @@ def inicializar_defaults():
 
 inicializar_defaults()
 
-# --- BARRA LATERAL E NAVEGAÇÃO COMPATÍVEL ---
+# --- BARRA LATERAL E NAVEGAÇÃO ---
 st.sidebar.markdown(f"### ⚡ Eli Sistemas")
 st.sidebar.caption(f"Usuário: **{st.session_state['user']}** ({st.session_state['perfil'].upper()})")
 
@@ -581,13 +580,11 @@ if menu == "📞 Abertura e Acompanhamento de Chamados":
 # ==============================================================================
 elif menu == "📅 Agenda Principal":
     st.title("📅 Agenda de Atividades e Manutenções")
-    
     col_ag1, col_ag2 = st.columns([2, 1])
     
     with col_ag2:
         st.subheader("📄 Exportar Calendário PDF")
         hoje = datetime.today()
-        
         modo_export = st.radio("Modo de Exportação", ["Mês Específico", "Histórico Completo"], horizontal=True)
         
         if modo_export == "Mês Específico":
@@ -599,13 +596,7 @@ elif menu == "📅 Agenda Principal":
             pdf_cal = gerar_pdf_calendario(incluir_tudo=True)
             file_title = "Historico_Completo_Agenda.pdf"
             
-        st.download_button(
-            "📅 Baixar Calendário (PDF)",
-            data=pdf_cal,
-            file_name=file_title,
-            mime="application/pdf",
-            use_container_width=True
-        )
+        st.download_button("📅 Baixar Calendário (PDF)", data=pdf_cal, file_name=file_title, mime="application/pdf", use_container_width=True)
 
     with col_ag1:
         with st.form("new_task_form", clear_on_submit=True):
@@ -621,15 +612,13 @@ elif menu == "📅 Agenda Principal":
             if submitted and task_name:
                 conn = sqlite3.connect(DB_FILE)
                 cursor = conn.cursor()
-                cursor.execute("INSERT INTO agenda (task, category, due_date, status) VALUES (?, ?, ?, ?)",
-                               (task_name, category, str(due_date), "Não realizado"))
+                cursor.execute("INSERT INTO agenda (task, category, due_date, status) VALUES (?, ?, ?, ?)", (task_name, category, str(due_date), "Não realizado"))
                 conn.commit()
                 conn.close()
                 st.success("Tarefa cadastrada com sucesso!")
                 st.rerun()
 
     st.divider()
-    
     st.subheader("📋 Lista de Tarefas")
     filtro_exibicao = st.radio("Filtrar Tarefas por:", ["Exibir Tudo (Histórico Completo)", "Apenas Mês Atual"], horizontal=True)
     
@@ -671,30 +660,44 @@ elif menu == "📅 Agenda Principal":
 
 elif menu == "📋 Vistoria & Relatório Técnico NBR 17240":
     st.header("📋 Inspeção Preventiva & Relatório NBR 17240")
-    if clientes_db:
-        lista_clientes_nomes = ["-- Selecione --"] + list(clientes_db.keys())
-        def ao_selecionar_cliente():
-            cli_nome = st.session_state["select_carregar_cliente"]
-            if cli_nome != "-- Selecione --" and cli_nome in clientes_db:
-                c_info = clientes_db[cli_nome]
-                st.session_state["cliente"] = c_info.get("nome", "")
-                st.session_state["cnpj"] = c_info.get("cnpj", "")
-                st.session_state["endereco"] = c_info.get("endereco", "")
-                st.session_state["cidade_uf"] = c_info.get("cidade_uf", "")
-                st.session_state["sindico"] = c_info.get("sindico", "")
-                st.session_state["zelador"] = c_info.get("zelador", "")
-                st.session_state["contato"] = c_info.get("contato", "")
-                st.session_state["email"] = c_info.get("email", "")
-                st.session_state["central_sdai"] = c_info.get("central_sdai", "")
-                st.session_state["tipo_central"] = c_info.get("tipo_central", "")
-                st.session_state["qtd_lacos"] = c_info.get("qtd_lacos", "")
-                st.session_state["det_fumaca"] = c_info.get("det_fumaca", "")
-                st.session_state["acionadores"] = c_info.get("acionadores", "")
-                st.session_state["avisadores"] = c_info.get("avisadores", "")
-                st.session_state["pressurizacao"] = c_info.get("pressurizacao", "")
-                st.session_state["tensao_baterias"] = c_info.get("tensao_baterias", "")
+    
+    # 1. BUSCAR E PREENCHER AUTOMATICAMENTE APENAS CLIENTES ATIVOS
+    clientes_ativos = {k: v for k, v in clientes_db.items() if v.get("status", "Ativo") == "Ativo"}
+    clientes_ordenados = sorted(list(clientes_ativos.keys()))
+    
+    lista_clientes_nomes = ["-- Selecione o Cliente Cadastrado --"] + clientes_ordenados
+    
+    def ao_selecionar_cliente():
+        cli_nome = st.session_state["select_carregar_cliente"]
+        if cli_nome != "-- Selecione o Cliente Cadastrado --" and cli_nome in clientes_db:
+            c_info = clientes_db[cli_nome]
+            # Preenchimento automático dos Dados Gerais
+            st.session_state["cliente"] = c_info.get("nome", "")
+            st.session_state["cnpj"] = c_info.get("cnpj", "")
+            st.session_state["endereco"] = c_info.get("endereco", "")
+            st.session_state["cidade_uf"] = c_info.get("cidade_uf", "Ribeirão Preto - SP")
+            st.session_state["sindico"] = c_info.get("sindico", "")
+            st.session_state["zelador"] = c_info.get("zelador", "")
+            st.session_state["contato"] = c_info.get("contato", "")
+            st.session_state["email"] = c_info.get("email", "")
+            
+            # Preenchimento automático de Características Técnicas do SDAI
+            st.session_state["central_sdai"] = c_info.get("central_sdai", "")
+            st.session_state["tipo_central"] = c_info.get("tipo_central", "SISTEMA ENDEREÇÁVEL")
+            st.session_state["qtd_lacos"] = c_info.get("qtd_lacos", "")
+            st.session_state["det_fumaca"] = c_info.get("det_fumaca", "")
+            st.session_state["acionadores"] = c_info.get("acionadores", "")
+            st.session_state["avisadores"] = c_info.get("avisadores", "")
+            st.session_state["pressurizacao"] = c_info.get("pressurizacao", "Não")
+            st.session_state["tensao_baterias"] = c_info.get("tensao_baterias", "24 Vcc")
 
-        st.selectbox("Selecione o Cliente", lista_clientes_nomes, key="select_carregar_cliente", on_change=ao_selecionar_cliente)
+    st.selectbox(
+        "🔎 Selecionar Cliente Cadastrado (Preenchimento Automático)", 
+        lista_clientes_nomes, 
+        key="select_carregar_cliente", 
+        on_change=ao_selecionar_cliente
+    )
+    st.divider()
 
     col1, col2 = st.columns(2)
     with col1:
@@ -702,11 +705,27 @@ elif menu == "📋 Vistoria & Relatório Técnico NBR 17240":
         st.text_input("CNPJ do Cliente", key="cnpj")
         st.text_input("Endereço", key="endereco")
         st.text_input("Cidade / UF", key="cidade_uf")
+        st.text_input("Síndico / Resp. Edificação", key="sindico")
+        st.text_input("Zelador / Gerente", key="zelador")
     with col2:
         st.text_input("Data da Visita", key="data_visita")
         st.text_input("Tipo de Visita", key="tipo_visita")
         st.text_input("Responsável Técnico", key="resp_tecnico")
         st.text_input("Acompanhante / Portaria", key="acompanhante")
+        st.text_input("Contato Telefone", key="contato")
+        st.text_input("E-mail do Cliente", key="email")
+
+    st.subheader("⚡ Características Técnicas do Sistema SDAI")
+    col_t1, col_t2, col_t3 = st.columns(3)
+    with col_t1:
+        st.text_input("Central SDAI (Marca/Modelo)", key="central_sdai")
+        st.text_input("Qtd. Detectores Fumaça/Térmicos", key="det_fumaca")
+    with col_t2:
+        st.text_input("Tipo de Central", key="tipo_central")
+        st.text_input("Qtd. Acionadores Manuais", key="acionadores")
+    with col_t3:
+        st.text_input("Qtd. Laços / Zonas", key="qtd_lacos")
+        st.text_input("Qtd. Avisadores Sonoros/Visuais", key="avisadores")
 
     st.subheader("🔍 Verificação dos Itens Normativos (Checklist)")
     for sec_key, sec_title in [("sec3", "3. Central & Fontes"), ("sec4", "4. Laços"), ("sec5", "5. Periféricos"), ("sec6", "6. Pressurização/IT13")]:
@@ -724,30 +743,99 @@ elif menu == "📋 Vistoria & Relatório Técnico NBR 17240":
     st.download_button("📄 GERAR E BAIXAR RELATÓRIO PDF", data=pdf_bytes, file_name="Relatorio_Vistoria.pdf", mime="application/pdf", type="primary")
 
 elif menu == "🏢 Cadastro de Clientes & SDAI":
-    st.header("🏢 Cadastro de Clientes e Equipamentos")
-    with st.form("form_cad_cliente"):
-        c_nome_cad = st.text_input("Nome do Condomínio / Empresa")
-        c_cnpj_cad = st.text_input("CNPJ")
-        c_end_cad = st.text_input("Endereço")
-        c_cid_cad = st.text_input("Cidade / UF", value="Ribeirão Preto - SP")
-        c_tel_cad = st.text_input("Telefone")
-        c_email_cad = st.text_input("E-mail")
+    st.header("🏢 Gestão, Cadastro e Edição de Clientes & Equipamentos")
+    
+    # 2. SEÇÃO DE CADASTRO, EDIÇÃO E STATUS (ATIVO / INATIVO)
+    tab_cli1, tab_cli2 = st.tabs(["➕ Cadastrar / Editar Cliente", "📋 Tabela de Clientes Cadastrados"])
+    
+    with tab_cli1:
+        opcoes_selecao = ["-- Cadastrar Novo Cliente --"] + sorted(list(clientes_db.keys()))
+        cliente_para_editar = st.selectbox("Selecione para Editar ou Cadastrar Novo:", opcoes_selecao)
         
-        st.subheader("Configuração SDAI")
-        c_csdai = st.text_input("Central SDAI (Modelo/Marca)")
-        c_tsdai = st.text_input("Tipo de Central", value="SISTEMA ENDEREÇÁVEL")
-        c_qlacos = st.text_input("Qtd. Laços", value="01 LAÇO")
-        
-        if st.form_submit_button("💾 Salvar Cliente"):
-            if c_nome_cad:
-                clientes_db[c_nome_cad] = {
-                    "nome": c_nome_cad, "cnpj": c_cnpj_cad, "endereco": c_end_cad,
-                    "cidade_uf": c_cid_cad, "contato": c_tel_cad, "email": c_email_cad,
-                    "central_sdai": c_csdai, "tipo_central": c_tsdai, "qtd_lacos": c_qlacos
-                }
-                salvar_json(CLIENTES_FILE, clientes_db)
-                st.success("Cliente cadastrado com sucesso!")
-                st.rerun()
+        # Carregar valores padrão se selecionado para edição
+        if cliente_para_editar != "-- Cadastrar Novo Cliente --":
+            dados_cli_edit = clientes_db[cliente_para_editar]
+            val_nome = dados_cli_edit.get("nome", cliente_para_editar)
+            val_cnpj = dados_cli_edit.get("cnpj", "")
+            val_end = dados_cli_edit.get("endereco", "")
+            val_cid = dados_cli_edit.get("cidade_uf", "Ribeirão Preto - SP")
+            val_tel = dados_cli_edit.get("contato", "")
+            val_email = dados_cli_edit.get("email", "")
+            val_sindico = dados_cli_edit.get("sindico", "")
+            val_zelador = dados_cli_edit.get("zelador", "")
+            val_csdai = dados_cli_edit.get("central_sdai", "")
+            val_tsdai = dados_cli_edit.get("tipo_central", "SISTEMA ENDEREÇÁVEL")
+            val_qlacos = dados_cli_edit.get("qtd_lacos", "01 LAÇO")
+            val_det = dados_cli_edit.get("det_fumaca", "")
+            val_ac = dados_cli_edit.get("acionadores", "")
+            val_av = dados_cli_edit.get("avisadores", "")
+            val_status = dados_cli_edit.get("status", "Ativo")
+        else:
+            val_nome, val_cnpj, val_end, val_cid, val_tel, val_email = "", "", "", "Ribeirão Preto - SP", "", ""
+            val_sindico, val_zelador, val_csdai, val_tsdai, val_qlacos = "", "", "", "SISTEMA ENDEREÇÁVEL", "01 LAÇO"
+            val_det, val_ac, val_av, val_status = "", "", "", "Ativo"
+
+        with st.form("form_cad_cliente"):
+            c1, c2 = st.columns(2)
+            with c1:
+                c_nome_cad = st.text_input("Nome do Condomínio / Empresa", value=val_nome)
+                c_cnpj_cad = st.text_input("CNPJ", value=val_cnpj)
+                c_end_cad = st.text_input("Endereço", value=val_end)
+                c_cid_cad = st.text_input("Cidade / UF", value=val_cid)
+                c_sindico_cad = st.text_input("Síndico / Resp. Edificação", value=val_sindico)
+            with c2:
+                c_tel_cad = st.text_input("Telefone de Contato", value=val_tel)
+                c_email_cad = st.text_input("E-mail do Cliente", value=val_email)
+                c_zelador_cad = st.text_input("Zelador / Gerente", value=val_zelador)
+                c_status_cad = st.selectbox("Status do Cadastro", ["Ativo", "Inativo"], index=0 if val_status == "Ativo" else 1)
+            
+            st.subheader("Configuração Equipamentos SDAI")
+            st1, st2, st3 = st.columns(3)
+            with st1:
+                c_csdai = st.text_input("Central SDAI (Modelo/Marca)", value=val_csdai)
+                c_det = st.text_input("Qtd. Detectores Fumaça/Térmicos", value=val_det)
+            with st2:
+                c_tsdai = st.text_input("Tipo de Central", value=val_tsdai)
+                c_ac = st.text_input("Qtd. Acionadores Manuais", value=val_ac)
+            with st3:
+                c_qlacos = st.text_input("Qtd. Laços", value=val_qlacos)
+                c_av = st.text_input("Qtd. Avisadores Sonoros/Visuais", value=val_av)
+            
+            if st.form_submit_button("💾 Salvar Dados do Cliente"):
+                if c_nome_cad:
+                    # Atualizar base mantendo a chave original caso o nome mude
+                    if cliente_para_editar != "-- Cadastrar Novo Cliente --" and cliente_para_editar != c_nome_cad:
+                        del clientes_db[cliente_para_editar]
+                        
+                    clientes_db[c_nome_cad] = {
+                        "nome": c_nome_cad, "cnpj": c_cnpj_cad, "endereco": c_end_cad,
+                        "cidade_uf": c_cid_cad, "contato": c_tel_cad, "email": c_email_cad,
+                        "sindico": c_sindico_cad, "zelador": c_zelador_cad,
+                        "central_sdai": c_csdai, "tipo_central": c_tsdai, "qtd_lacos": c_qlacos,
+                        "det_fumaca": c_det, "acionadores": c_ac, "avisadores": c_av,
+                        "status": c_status_cad
+                    }
+                    salvar_json(CLIENTES_FILE, clientes_db)
+                    st.success(f"Cliente '{c_nome_cad}' salvo com sucesso!")
+                    st.rerun()
+
+    with tab_cli2:
+        st.subheader("Clientes Cadastrados em Ordem Alfabética")
+        if not clientes_db:
+            st.info("Nenhum cliente cadastrado.")
+        else:
+            df_clientes = []
+            for k in sorted(clientes_db.keys()):
+                v = clientes_db[k]
+                df_clientes.append({
+                    "Cliente": v.get("nome", k),
+                    "Status": v.get("status", "Ativo"),
+                    "CNPJ": v.get("cnpj", "-"),
+                    "Cidade": v.get("cidade_uf", "-"),
+                    "Telefone": v.get("contato", "-"),
+                    "Central SDAI": v.get("central_sdai", "-")
+                })
+            st.dataframe(pd.DataFrame(df_clientes), use_container_width=True)
 
 elif menu == "📞 Gestão de Chamados":
     st.header("📞 Gestão e Acompanhamento de Chamados Técnicos")
@@ -807,7 +895,7 @@ elif menu == "📞 Gestão de Chamados":
 elif menu == "📂 Histórico & Pasta do Cliente":
     st.header("📂 Pasta Digital por Cliente")
     if clientes_db:
-        cli_sel = st.selectbox("Selecione o Cliente", list(clientes_db.keys()))
+        cli_sel = st.selectbox("Selecione o Cliente", sorted(list(clientes_db.keys())))
         nome_pasta_cliente = "".join(c for c in cli_sel if c.isalnum() or c in (' ', '_', '-')).strip()
         cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
         
@@ -873,9 +961,13 @@ elif menu == "🏢 Dados da Minha Empresa":
 
 elif menu == "👥 Gerenciar Usuários":
     st.header("👥 Gestão de Usuários e Vínculos com Clientes")
-    tab_u1, tab_u2, tab_u3 = st.tabs(["➕ Novo Usuário", "✏️ Vincular / Editar Usuário", "📋 Usuários Cadastrados"])
     
-    lista_cli_vinculo = ["-- Nenhum / Administrador --"] + list(clientes_db.keys())
+    # 3. RELAÇÃO E EDIÇÃO EM ORDEM ALFABÉTICA DE CLIENTES ATIVOS / INATIVOS
+    tab_u1, tab_u2, tab_u3, tab_u4 = st.tabs(["➕ Novo Usuário", "✏️ Editar Usuário", "📋 Usuários Cadastrados", "🏢 Relação de Clientes (Ativo/Inativo)"])
+    
+    # Filtrar clientes ativos para criação/vínculo de usuários
+    clientes_ordem_alfabetica = sorted(list(clientes_db.keys()))
+    lista_cli_vinculo = ["-- Nenhum / Administrador --"] + [c for c in clientes_ordem_alfabetica if clientes_db[c].get("status", "Ativo") == "Ativo"]
 
     with tab_u1:
         with st.form("form_novo_usuario"):
@@ -900,7 +992,7 @@ elif menu == "👥 Gerenciar Usuários":
 
     with tab_u2:
         st.subheader("Editar Vínculo e Perfil de Usuário Existente")
-        usr_sel = st.selectbox("Selecione o Usuário para Alterar", list(usuarios.keys()))
+        usr_sel = st.selectbox("Selecione o Usuário para Alterar", sorted(list(usuarios.keys())))
         if usr_sel:
             dados_u = usuarios[usr_sel]
             with st.form("form_edit_usuario"):
@@ -924,13 +1016,35 @@ elif menu == "👥 Gerenciar Usuários":
 
     with tab_u3:
         st.subheader("Lista de Usuários Cadastrados")
-        for u, d in usuarios.items():
+        for u in sorted(list(usuarios.keys())):
+            d = usuarios[u]
             st.markdown(f"**Login:** `{u}` | **Nome:** {d.get('nome')} | **Perfil:** `{d.get('perfil')}` | **Cliente Vinculado:** {d.get('cliente_vinculado') if d.get('cliente_vinculado') else 'Nenhum (Master)'}")
             st.divider()
 
+    with tab_u4:
+        st.subheader("🏢 Relação de Clientes (Ordem Alfabética) & Alteração de Status")
+        if not clientes_ordem_alfabetica:
+            st.info("Nenhum cliente cadastrado.")
+        else:
+            for cli_k in clientes_ordem_alfabetica:
+                cli_info = clientes_db[cli_k]
+                st_atual = cli_info.get("status", "Ativo")
+                
+                col_c1, col_c2, col_c3 = st.columns([3, 1.5, 1])
+                with col_c1:
+                    st.markdown(f"**{cli_info.get('nome', cli_k)}**<br><small>CNPJ: {cli_info.get('cnpj', '-')} | Cidade: {cli_info.get('cidade_uf', '-')}</small>", unsafe_allow_html=True)
+                with col_c2:
+                    novo_st = st.selectbox("Opção Status", ["Ativo", "Inativo"], index=0 if st_atual == "Ativo" else 1, key=f"st_fast_{cli_k}")
+                with col_c3:
+                    if st.button("💾 Atualizar", key=f"btn_st_fast_{cli_k}"):
+                        clientes_db[cli_k]["status"] = novo_st
+                        salvar_json(CLIENTES_FILE, clientes_db)
+                        st.success("Status atualizado!")
+                        st.rerun()
+                st.divider()
+
 elif menu == "💾 Backup & Restauração":
     st.header("💾 Central de Backup e Restauração de Dados")
-    
     tab_b1, tab_b2 = st.tabs(["⬇️ Fazer Backup", "⬆️ Restaurar / Upload de Backup"])
     
     with tab_b1:
