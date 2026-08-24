@@ -5,152 +5,161 @@ from fpdf import FPDF
 import tempfile
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURAÇÃO E AUTENTICAÇÃO / LOGIN
+# 1. CONFIGURAÇÃO E AUTENTICAÇÃO
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="Eli Sistemas - SDAI", layout="wide")
 
-# Inicialização da Sessão de Login
-if "autenticado" not in st.session_state:
-    st.session_state["autenticado"] = True  # Mantém logado padrão ou ajuste conforme sua regra
-if "usuario" not in st.session_state:
-    st.session_state["usuario"] = "admin (MASTER)"
-
-# --- MENU LATERAL (SIDEBAR) ---
-with st.sidebar:
-    st.title("⚡ Eli Sistemas")
-    st.write(f"Usuário: **{st.session_state['usuario']}**")
-    
-    if st.button("🚪 Sair / Logout"):
-        st.session_state["autenticado"] = False
-        st.rerun()
-        
-    st.divider()
-    opcao_menu = st.selectbox(
-        "Navegação",
-        ["Vistoria & Relatório Técnico NBR", "Cadastro da Empresa / Logo"]
-    )
-
 RASCUNHO_FILE = "rascunho_relatorio.json"
 
-# -----------------------------------------------------------------------------
-# 2. GERADOR DE PDF (FPDF)
-# -----------------------------------------------------------------------------
-class RelatorioPDF(FPDF):
-    def __init__(self, logo_path=None):
-        super().__init__()
-        self.logo_path = logo_path
-
-    def header(self):
-        if self.logo_path and os.path.exists(self.logo_path):
-            self.image(self.logo_path, x=10, y=8, w=25)
-            self.set_x(40)
-            self.set_font("Arial", "B", 11)
-            self.cell(0, 10, "RELATÓRIO TÉCNICO DE VISTORIA - SDAI / NBR", border=True, ln=True, align="C")
-        else:
-            self.set_font("Arial", "B", 11)
-            self.cell(0, 10, "RELATÓRIO TÉCNICO DE VISTORIA - SDAI / NBR", border=True, ln=True, align="C")
-        self.ln(5)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font("Arial", "I", 8)
-        self.cell(0, 10, f"Página {self.page_no()}/{{nb}}", align="C")
-
-def gerar_pdf_completo(dados, fotos_bytes, logo_bytes):
-    logo_temp_path = None
-    if logo_bytes is not None:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_logo:
-            tmp_logo.write(logo_bytes.getvalue())
-            logo_temp_path = tmp_logo.name
-
-    pdf = RelatorioPDF(logo_path=logo_temp_path)
-    pdf.alias_nb_pages()
-    pdf.add_page()
-
-    colunas = ["Item / Periférico", "Parâmetro Normativo", "Valor Medido", "Status", "Observações"]
-
-    # Tabelas do Checklist (3 a 6)
-    if "secoes" in dados:
-        for titulo_secao, itens in dados["secoes"].items():
-            pdf.set_font("Arial", "B", 10)
-            pdf.cell(0, 7, titulo_secao, ln=True)
-            
-            pdf.set_font("Arial", "B", 8)
-            larguras = [45, 60, 20, 25, 40]
-            for i, col in enumerate(colunas):
-                pdf.cell(larguras[i], 6, col, border=1, align="C")
-            pdf.ln()
-
-            pdf.set_font("Arial", size=8)
-            for linha in itens:
-                pdf.cell(larguras[0], 6, str(linha.get("item", "")), border=1)
-                pdf.cell(larguras[1], 6, str(linha.get("parametro", "")), border=1)
-                pdf.cell(larguras[2], 6, str(linha.get("valor", "")), border=1, align="C")
-                pdf.cell(larguras[3], 6, str(linha.get("status", "")), border=1, align="C")
-                pdf.cell(larguras[4], 6, str(linha.get("obs", "")), border=1)
-                pdf.ln()
-            pdf.ln(3)
-
-    # 7. Conclusão Técnica
-    pdf.set_font("Arial", "B", 10)
-    pdf.cell(0, 7, "7. CONCLUSÃO TÉCNICA E ORIENTAÇÕES OPERACIONAIS", ln=True)
-    pdf.set_font("Arial", "B", 8)
-    pdf.cell(0, 5, "Parecer Técnico / Conclusão:", ln=True)
-    pdf.set_font("Arial", size=8)
-    pdf.multi_cell(0, 4, dados.get("parecer_tecnico", "Sem observações."), border=1)
-    pdf.ln(2)
-
-    pdf.set_font("Arial", "B", 8)
-    pdf.cell(0, 5, "Orientações Operacionais:", ln=True)
-    pdf.set_font("Arial", size=8)
-    pdf.multi_cell(0, 4, dados.get("orientacoes_ops", "Sem orientações."), border=1)
-    pdf.ln(4)
-
-    # 8. Validação e Assinaturas
-    pdf.set_font("Arial", "B", 10)
-    pdf.cell(0, 7, "8. VALIDAÇÃO E ASSINATURAS TÉCNICAS", ln=True)
-    pdf.set_font("Arial", size=8)
-    pdf.cell(95, 5, f"Responsável Técnico: {dados.get('resp_tecnico', '')}", border=0)
-    pdf.cell(95, 5, f"Responsável / Síndico: {dados.get('resp_cliente', '')}", ln=True)
-    pdf.ln(8)
-    pdf.cell(95, 5, "____________________________________", border=0)
-    pdf.cell(95, 5, "____________________________________", ln=True)
-    pdf.cell(95, 5, "Assinatura do Técnico", border=0)
-    pdf.cell(95, 5, "Assinatura do Cliente / Recebedor", ln=True)
-
-    # Anexo Fotográfico
-    if fotos_bytes:
-        pdf.add_page()
-        pdf.set_font("Arial", "B", 11)
-        pdf.cell(0, 8, "ANEXO FOTOGRÁFICO", ln=True, align="C")
-        pdf.ln(4)
-
-        for foto in fotos_bytes:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_foto:
-                tmp_foto.write(foto.getvalue())
-                tmp_foto_path = tmp_foto.name
-
-            pdf.image(tmp_foto_path, w=90)
-            pdf.ln(4)
-            os.remove(tmp_foto_path)
-
-    if logo_temp_path and os.path.exists(logo_temp_path):
-        os.remove(logo_temp_path)
-
-    return pdf.output(dest='S').encode('latin-1')
+# Inicializa o estado de autenticação
+if "autenticado" not in st.session_state:
+    st.session_state["autenticado"] = False
 
 # -----------------------------------------------------------------------------
-# 3. INTERFACE E DADOS DENTRO DA APLICAÇÃO
+# TELA DE LOGIN (SÓ MOSTRA SE NÃO ESTIVER AUTENTICADO)
 # -----------------------------------------------------------------------------
 if not st.session_state["autenticado"]:
-    st.title("🔑 Login do Sistema")
-    user = st.text_input("Usuário")
-    senha = st.text_input("Senha", type="password")
-    if st.button("Entrar"):
-        st.session_state["autenticado"] = True
-        st.rerun()
+    st.title("🔑 Login do Sistema - Eli Sistemas")
+    
+    col_login, _ = st.columns([1, 1])
+    with col_login:
+        usuario = st.text_input("Usuário", key="user_login")
+        senha = st.text_input("Senha", type="password", key="pass_login")
+        
+        if st.button("Entrar", type="primary"):
+            # Validação simples (pode alterar o usuário e senha aqui)
+            if usuario.strip() != "" and senha.strip() != "":
+                st.session_state["autenticado"] = True
+                st.session_state["usuario"] = usuario
+                st.rerun()
+            else:
+                st.error("Por favor, preencha o usuário e a senha.")
+
+# -----------------------------------------------------------------------------
+# SISTEMA COMPLETO (SÓ CARREGA APÓS O LOGIN)
+# -----------------------------------------------------------------------------
 else:
-    # --- PÁGINA: CADASTRO DA EMPRESA ---
+    # --- MENU LATERAL (SIDEBAR) ---
+    with st.sidebar:
+        st.title("⚡ Eli Sistemas")
+        st.write(f"Usuário: **{st.session_state.get('usuario', 'Admin')}**")
+        
+        opcao_menu = st.radio(
+            "Navegação",
+            ["Vistoria & Relatório Técnico NBR", "Cadastro da Empresa / Logo"]
+        )
+        
+        st.divider()
+        if st.button("🚪 Sair / Logout"):
+            st.session_state["autenticado"] = False
+            st.rerun()
+
+    # -------------------------------------------------------------------------
+    # GERADOR DE PDF (FPDF)
+    # -------------------------------------------------------------------------
+    class RelatorioPDF(FPDF):
+        def __init__(self, logo_path=None):
+            super().__init__()
+            self.logo_path = logo_path
+
+        def header(self):
+            if self.logo_path and os.path.exists(self.logo_path):
+                self.image(self.logo_path, x=10, y=8, w=25)
+                self.set_x(40)
+                self.set_font("Arial", "B", 11)
+                self.cell(0, 10, "RELATÓRIO TÉCNICO DE VISTORIA - SDAI / NBR", border=True, ln=True, align="C")
+            else:
+                self.set_font("Arial", "B", 11)
+                self.cell(0, 10, "RELATÓRIO TÉCNICO DE VISTORIA - SDAI / NBR", border=True, ln=True, align="C")
+            self.ln(5)
+
+        def footer(self):
+            self.set_y(-15)
+            self.set_font("Arial", "I", 8)
+            self.cell(0, 10, f"Página {self.page_no()}/{{nb}}", align="C")
+
+    def gerar_pdf_completo(dados, fotos_bytes, logo_bytes):
+        logo_temp_path = None
+        if logo_bytes is not None:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_logo:
+                tmp_logo.write(logo_bytes.getvalue())
+                logo_temp_path = tmp_logo.name
+
+        pdf = RelatorioPDF(logo_path=logo_temp_path)
+        pdf.alias_nb_pages()
+        pdf.add_page()
+
+        colunas = ["Item / Periférico", "Parâmetro Normativo", "Valor Medido", "Status", "Observações"]
+
+        if "secoes" in dados:
+            for titulo_secao, itens in dados["secoes"].items():
+                pdf.set_font("Arial", "B", 10)
+                pdf.cell(0, 7, titulo_secao, ln=True)
+                
+                pdf.set_font("Arial", "B", 8)
+                larguras = [45, 60, 20, 25, 40]
+                for i, col in enumerate(colunas):
+                    pdf.cell(larguras[i], 6, col, border=1, align="C")
+                pdf.ln()
+
+                pdf.set_font("Arial", size=8)
+                for linha in itens:
+                    pdf.cell(larguras[0], 6, str(linha.get("item", "")), border=1)
+                    pdf.cell(larguras[1], 6, str(linha.get("parametro", "")), border=1)
+                    pdf.cell(larguras[2], 6, str(linha.get("valor", "")), border=1, align="C")
+                    pdf.cell(larguras[3], 6, str(linha.get("status", "")), border=1, align="C")
+                    pdf.cell(larguras[4], 6, str(linha.get("obs", "")), border=1)
+                    pdf.ln()
+                pdf.ln(3)
+
+        pdf.set_font("Arial", "B", 10)
+        pdf.cell(0, 7, "7. CONCLUSÃO TÉCNICA E ORIENTAÇÕES OPERACIONAIS", ln=True)
+        pdf.set_font("Arial", "B", 8)
+        pdf.cell(0, 5, "Parecer Técnico / Conclusão:", ln=True)
+        pdf.set_font("Arial", size=8)
+        pdf.multi_cell(0, 4, dados.get("parecer_tecnico", "Sem observações."), border=1)
+        pdf.ln(2)
+
+        pdf.set_font("Arial", "B", 8)
+        pdf.cell(0, 5, "Orientações Operacionais:", ln=True)
+        pdf.set_font("Arial", size=8)
+        pdf.multi_cell(0, 4, dados.get("orientacoes_ops", "Sem orientações."), border=1)
+        pdf.ln(4)
+
+        pdf.set_font("Arial", "B", 10)
+        pdf.cell(0, 7, "8. VALIDAÇÃO E ASSINATURAS TÉCNICAS", ln=True)
+        pdf.set_font("Arial", size=8)
+        pdf.cell(95, 5, f"Responsável Técnico: {dados.get('resp_tecnico', '')}", border=0)
+        pdf.cell(95, 5, f"Responsável / Síndico: {dados.get('resp_cliente', '')}", ln=True)
+        pdf.ln(8)
+        pdf.cell(95, 5, "____________________________________", border=0)
+        pdf.cell(95, 5, "____________________________________", ln=True)
+        pdf.cell(95, 5, "Assinatura do Técnico", border=0)
+        pdf.cell(95, 5, "Assinatura do Cliente / Recebedor", ln=True)
+
+        if fotos_bytes:
+            pdf.add_page()
+            pdf.set_font("Arial", "B", 11)
+            pdf.cell(0, 8, "ANEXO FOTOGRÁFICO", ln=True, align="C")
+            pdf.ln(4)
+
+            for foto in fotos_bytes:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_foto:
+                    tmp_foto.write(foto.getvalue())
+                    tmp_foto_path = tmp_foto.name
+
+                pdf.image(tmp_foto_path, w=90)
+                pdf.ln(4)
+                os.remove(tmp_foto_path)
+
+        if logo_temp_path and os.path.exists(logo_temp_path):
+            os.remove(logo_temp_path)
+
+        return pdf.output(dest='S').encode('latin-1')
+
+    # -------------------------------------------------------------------------
+    # NAVEGAÇÃO DE PÁGINAS (PÓS-LOGIN)
+    # -------------------------------------------------------------------------
     if opcao_menu == "Cadastro da Empresa / Logo":
         st.title("🏢 Cadastro da Empresa e Logo")
         logo_file = st.file_uploader("Upload do Logo da Empresa", type=["png", "jpg", "jpeg"], key="logo_upload")
@@ -158,11 +167,9 @@ else:
             st.session_state["logo_empresa"] = logo_file
             st.image(logo_file, width=150, caption="Logo Carregado")
 
-    # --- PÁGINA: VISTORIA & RELATÓRIO TÉCNICO ---
     elif opcao_menu == "Vistoria & Relatório Técnico NBR":
         st.title("⚡ Vistoria & Relatório Técnico NBR")
 
-        # Inicializa estado padrão
         if "relatorio_data" not in st.session_state:
             st.session_state["relatorio_data"] = {
                 "qtd_detectores": "0",
@@ -189,7 +196,6 @@ else:
                 }
             }
 
-        # Controles de Rascunho
         col_r1, col_r2, _ = st.columns([1, 1, 2])
         with col_r1:
             if st.button("💾 Salvar Rascunho"):
@@ -209,7 +215,6 @@ else:
 
         st.divider()
 
-        # Quantitativos
         c1, c2, c3 = st.columns(3)
         with c1:
             st.session_state["relatorio_data"]["qtd_detectores"] = st.text_input("Qtd. Detectores Fumaça/Térmicos", st.session_state["relatorio_data"]["qtd_detectores"])
@@ -220,7 +225,6 @@ else:
 
         st.subheader("🔍 Verificação dos Itens Normativos (Checklist)")
 
-        # Renderização das Seções
         for titulo_secao, itens in st.session_state["relatorio_data"]["secoes"].items():
             with st.expander(titulo_secao, expanded=False):
                 for idx, item in enumerate(itens):
@@ -235,7 +239,6 @@ else:
                     with col_d:
                         item["obs"] = st.text_input(f"Observação ({idx})", item["obs"], key=f"o_{titulo_secao}_{idx}")
 
-        # Seção 7: Conclusão Técnica
         with st.expander("7. Conclusão Técnica e Orientações Operacionais", expanded=True):
             st.session_state["relatorio_data"]["parecer_tecnico"] = st.text_area(
                 "Parecer Técnico / Conclusão",
@@ -248,11 +251,9 @@ else:
                 height=100
             )
 
-        # Anexo Fotográfico
         with st.expander("📷 Anexo Fotográfico", expanded=True):
             fotos_uploaded = st.file_uploader("Selecione as fotos da vistoria", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
-        # Seção 8: Assinaturas
         with st.expander("8. Validação e Assinaturas Técnicas", expanded=True):
             col_t1, col_t2 = st.columns(2)
             with col_t1:
@@ -262,7 +263,6 @@ else:
 
         st.divider()
 
-        # Botão Gerar PDF
         if st.button("📄 GERAR E BAIXAR RELATÓRIO PDF", type="primary"):
             logo_salva = st.session_state.get("logo_empresa", None)
             pdf_bytes = gerar_pdf_completo(st.session_state["relatorio_data"], fotos_uploaded, logo_salva)
