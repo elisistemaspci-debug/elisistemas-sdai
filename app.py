@@ -66,6 +66,14 @@ def perform_backup():
         return backup_path
     return None
 
+def restaurar_backup(uploaded_file):
+    if uploaded_file is not None:
+        perform_backup() # Faz backup preventivo do atual antes de sobrescrever
+        with open(DB_FILE, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        return True
+    return False
+
 # --- CARREGAMENTO E MANIPULAÇÃO DE DADOS JSON ---
 @st.cache_data
 def carregar_json_cached(path):
@@ -187,7 +195,7 @@ if not st.session_state["logged_in"]:
     st.stop()
 
 # --- FUNÇÃO PARA GERAR PDF EM FORMATO DE CALENDÁRIO ---
-def gerar_pdf_calendario(ano, mes):
+def gerar_pdf_calendario(ano=None, mes=None, incluir_tudo=False):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer, 
@@ -207,7 +215,7 @@ def gerar_pdf_calendario(ano, mes):
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT task, due_date, status FROM agenda")
+    cursor.execute("SELECT task, due_date, status FROM agenda ORDER BY due_date ASC")
     rows = cursor.fetchall()
     conn.close()
 
@@ -215,56 +223,85 @@ def gerar_pdf_calendario(ano, mes):
     for task, due_date, status in rows:
         try:
             dt = datetime.strptime(due_date, "%Y-%m-%d")
-            if dt.year == ano and dt.month == mes:
-                d = dt.day
+            if incluir_tudo or (dt.year == ano and dt.month == mes):
+                d = dt.day if not incluir_tudo else f"{dt.day}/{dt.month}/{dt.year}"
                 if d not in tarefas_por_dia:
                     tarefas_por_dia[d] = []
-                tarefas_por_dia[d].append((task, status))
+                tarefas_por_dia[d].append((task, status, due_date))
         except:
             pass
 
     meses_pt = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
-    story.append(Paragraph(f"<b>AGENDA DE MANUTENÇÕES & ATIVIDADES - {meses_pt[mes].upper()} / {ano}</b>", style_titulo))
+    
+    if incluir_tudo:
+        story.append(Paragraph(f"<b>RELATÓRIO COMPLETO DE TAREFAS E HISTÓRICO DA AGENDA</b>", style_titulo))
+    else:
+        story.append(Paragraph(f"<b>AGENDA DE MANUTENÇÕES & ATIVIDADES - {meses_pt[mes].upper()} / {ano}</b>", style_titulo))
+        
     story.append(Paragraph(f"<font size=8>{empresa_db.get('nome', '')}</font>", ParagraphStyle('Sub', parent=styles['Normal'], alignment=1)))
     story.append(Spacer(1, 8))
 
-    dias_semana = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
-    tabela_dados = [[Paragraph(f"<b>{d}</b>", style_cab_dia) for d in dias_semana]]
+    if not incluir_tudo and ano and mes:
+        dias_semana = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+        tabela_dados = [[Paragraph(f"<b>{d}</b>", style_cab_dia) for d in dias_semana]]
 
-    cal = calendar.Calendar(firstweekday=0)
-    mes_matriz = cal.monthdayscalendar(ano, mes)
+        cal = calendar.Calendar(firstweekday=0)
+        mes_matriz = cal.monthdayscalendar(ano, mes)
 
-    for semana in mes_matriz:
-        linha_semana = []
-        for dia in semana:
-            if dia == 0:
-                linha_semana.append(Paragraph("", style_dia_num))
-            else:
-                conteudo = [Paragraph(f"<b>{dia}</b>", style_dia_num)]
-                if dia in tarefas_por_dia:
-                    for t_desc, t_stat in tarefas_por_dia[dia]:
-                        check = "✔ " if t_stat == "Realizado" else "• "
-                        conteudo.append(Paragraph(f"{check}{t_desc}", style_tarefa))
-                linha_semana.append(conteudo)
-        tabela_dados.append(linha_semana)
+        for semana in mes_matriz:
+            linha_semana = []
+            for dia in semana:
+                if dia == 0:
+                    linha_semana.append(Paragraph("", style_dia_num))
+                else:
+                    conteudo = [Paragraph(f"<b>{dia}</b>", style_dia_num)]
+                    if dia in tarefas_por_dia:
+                        for t_desc, t_stat, _ in tarefas_por_dia[dia]:
+                            check = "✔ " if t_stat == "Realizado" else "• "
+                            conteudo.append(Paragraph(f"{check}{t_desc}", style_tarefa))
+                    linha_semana.append(conteudo)
+            tabela_dados.append(linha_semana)
 
-    largura_col = 114
-    t_cal = Table(tabela_dados, colWidths=[largura_col]*7)
-    
-    estilo_tabela = [
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
-        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#BDC3C7")),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-    ]
-    
-    for i in range(1, len(tabela_dados)):
-        estilo_tabela.append(('ROWBACKGROUNDS', (0, i), (-1, i), [colors.whitesmoke if i % 2 == 0 else colors.HexColor("#FAFAFA")]))
+        largura_col = 114
+        t_cal = Table(tabela_dados, colWidths=[largura_col]*7)
+        
+        estilo_tabela = [
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#BDC3C7")),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]
+        
+        for i in range(1, len(tabela_dados)):
+            estilo_tabela.append(('ROWBACKGROUNDS', (0, i), (-1, i), [colors.whitesmoke if i % 2 == 0 else colors.HexColor("#FAFAFA")]))
 
-    t_cal.setStyle(TableStyle(estilo_tabela))
-    story.append(t_cal)
+        t_cal.setStyle(TableStyle(estilo_tabela))
+        story.append(t_cal)
+    else:
+        # Layout em Tabela Lista para Histórico Completo
+        dados_tabela = [[
+            Paragraph("<b>Data Alvo</b>", style_cab_dia),
+            Paragraph("<b>Descrição da Tarefa</b>", style_cab_dia),
+            Paragraph("<b>Status</b>", style_cab_dia)
+        ]]
+        for task, due_date, status in rows:
+            check = "✔ Realizado" if status == "Realizado" else "⏳ Não realizado"
+            dados_tabela.append([
+                Paragraph(due_date, style_dia_num),
+                Paragraph(task, style_dia_num),
+                Paragraph(check, style_tarefa)
+            ])
+        t_list = Table(dados_tabela, colWidths=[100, 550, 150])
+        t_list.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#BDC3C7")),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(t_list)
 
     doc.build(story)
     buffer.seek(0)
@@ -460,7 +497,7 @@ else:
         "📂 Histórico & Pasta do Cliente",
         "🏢 Dados da Minha Empresa",
         "👥 Gerenciar Usuários",
-        "💾 Backup Diário"
+        "💾 Backup & Restauração"
     ]
 
 menu = st.sidebar.selectbox("Navegação", menu_opcoes)
@@ -550,14 +587,22 @@ elif menu == "📅 Agenda Principal":
     with col_ag2:
         st.subheader("📄 Exportar Calendário PDF")
         hoje = datetime.today()
-        mes_pdf = st.selectbox("Mês", list(range(1, 13)), index=hoje.month - 1)
-        ano_pdf = st.number_input("Ano", min_value=2024, max_value=2035, value=hoje.year)
         
-        pdf_cal = gerar_pdf_calendario(ano_pdf, mes_pdf)
+        modo_export = st.radio("Modo de Exportação", ["Mês Específico", "Histórico Completo"], horizontal=True)
+        
+        if modo_export == "Mês Específico":
+            mes_pdf = st.selectbox("Mês", list(range(1, 13)), index=hoje.month - 1)
+            ano_pdf = st.number_input("Ano", min_value=2024, max_value=2035, value=hoje.year)
+            pdf_cal = gerar_pdf_calendario(ano_pdf, mes_pdf, incluir_tudo=False)
+            file_title = f"Calendario_Agenda_{mes_pdf}_{ano_pdf}.pdf"
+        else:
+            pdf_cal = gerar_pdf_calendario(incluir_tudo=True)
+            file_title = "Historico_Completo_Agenda.pdf"
+            
         st.download_button(
             "📅 Baixar Calendário (PDF)",
             data=pdf_cal,
-            file_name=f"Calendario_Agenda_{mes_pdf}_{ano_pdf}.pdf",
+            file_name=file_title,
             mime="application/pdf",
             use_container_width=True
         )
@@ -584,11 +629,21 @@ elif menu == "📅 Agenda Principal":
                 st.rerun()
 
     st.divider()
+    
+    st.subheader("📋 Lista de Tarefas")
+    filtro_exibicao = st.radio("Filtrar Tarefas por:", ["Exibir Tudo (Histórico Completo)", "Apenas Mês Atual"], horizontal=True)
+    
     conn = sqlite3.connect(DB_FILE)
-    df_agenda = pd.read_sql("SELECT * FROM agenda ORDER BY due_date ASC", conn)
+    if filtro_exibicao == "Apenas Mês Atual":
+        mes_atual_str = datetime.today().strftime("%Y-%m")
+        df_agenda = pd.read_sql(f"SELECT * FROM agenda WHERE due_date LIKE '{mes_atual_str}%' ORDER BY due_date ASC", conn)
+    else:
+        df_agenda = pd.read_sql("SELECT * FROM agenda ORDER BY due_date ASC", conn)
     conn.close()
     
-    if not df_agenda.empty:
+    if df_agenda.empty:
+        st.info("Nenhuma tarefa registrada para a seleção.")
+    else:
         for index, row in df_agenda.iterrows():
             cols = st.columns([3, 1, 1, 1])
             with cols[0]:
@@ -873,11 +928,30 @@ elif menu == "👥 Gerenciar Usuários":
             st.markdown(f"**Login:** `{u}` | **Nome:** {d.get('nome')} | **Perfil:** `{d.get('perfil')}` | **Cliente Vinculado:** {d.get('cliente_vinculado') if d.get('cliente_vinculado') else 'Nenhum (Master)'}")
             st.divider()
 
-elif menu == "💾 Backup Diário":
-    st.header("💾 Central de Backup")
-    if st.button("Executar Backup do Banco de Dados (.db agora)"):
-        b_path = perform_backup()
-        if b_path:
-            st.success(f"Backup criado com sucesso em: {b_path}")
-            with open(b_path, "rb") as f:
-                st.download_button("Baixar Arquivo .db", f, file_name=os.path.basename(b_path))
+elif menu == "💾 Backup & Restauração":
+    st.header("💾 Central de Backup e Restauração de Dados")
+    
+    tab_b1, tab_b2 = st.tabs(["⬇️ Fazer Backup", "⬆️ Restaurar / Upload de Backup"])
+    
+    with tab_b1:
+        st.subheader("Exportar Banco de Dados Atual")
+        st.write("Baixe o arquivo de banco de dados (`.db`) para manter uma cópia de segurança de toda a sua agenda e relatórios.")
+        if st.button("📦 Executar Backup Agora"):
+            b_path = perform_backup()
+            if b_path:
+                st.success(f"Backup criado com sucesso em: `{b_path}`")
+                with open(b_path, "rb") as f:
+                    st.download_button("💾 Baixar Arquivo de Banco (.db)", f, file_name=os.path.basename(b_path))
+                    
+    with tab_b2:
+        st.subheader("Importar e Restaurar Banco de Dados")
+        st.warning("⚠️ Atenção: Fazer o upload de um arquivo de backup substituirá o banco de dados atual.")
+        uploaded_db = st.file_uploader("Selecione o arquivo de banco de dados (.db)", type=["db"])
+        
+        if uploaded_db is not None:
+            if st.button("🔄 Restaurar Dados deste Arquivo"):
+                if restaurar_backup(uploaded_db):
+                    st.success("✅ Banco de dados restaurado com sucesso! Recarregando sistema...")
+                    st.rerun()
+                else:
+                    st.error("Erro ao tentar restaurar o arquivo fornecido.")
