@@ -4,6 +4,7 @@ import json
 import sqlite3
 import shutil
 import hashlib
+import calendar
 from datetime import datetime
 import streamlit as st
 import pandas as pd
@@ -450,16 +451,16 @@ elif menu == "📂 Rascunhos de Vistoria":
 elif menu == "📅 Agenda de Atividades":
     st.header("📅 Agenda de Atividades & Manutenções")
     
-    tab_a1, tab_a2 = st.tabs(["📋 Visualizar e Gerenciar Agenda", "➕ Nova Atividade / Registro"])
+    tab_a1, tab_a2 = st.tabs(["📆 Visualizar Calendário Mensal", "➕ Nova Atividade / Registro"])
     
     with tab_a2:
         with st.form("form_nova_agenda"):
             nova_tarefa = st.text_input("Descrição da Tarefa / Atividade / Cobrança")
-            categoria = st.selectbox("Categoria", ["Atividade Técnica", "Manutenção Preventiva", "Cobrança / Pagamento"])
+            categoria = st.selectbox("Categoria", ["Atividade Técnica", "Manutenção Preventiva", "Cobrança / Pagamento", "Diária"])
             data_prev = st.date_input("Data Prevista", datetime.now())
             status_inicial = st.selectbox("Status", ["Não realizado", "Realizado", "Pendente"])
             
-            if st.form_submit_button("➕ Adicionar à Agenda"):
+            if st.form_submit_button("➕ Adicionar à Agenda", type="primary"):
                 if nova_tarefa:
                     conn = sqlite3.connect(DB_FILE)
                     cursor = conn.cursor()
@@ -474,50 +475,79 @@ elif menu == "📅 Agenda de Atividades":
         conn = sqlite3.connect(DB_FILE)
         df_agenda = pd.read_sql_query("SELECT id AS ID, task AS Tarefa, category AS Categoria, due_date AS 'Data Prevista', status AS Status FROM agenda ORDER BY due_date ASC", conn)
         conn.close()
+
+        # Seleção do Mês e Ano para visualização do Calendário
+        col_m1, col_m2, col_m3 = st.columns([2, 2, 3])
+        with col_m1:
+            mes_sel = st.selectbox("Mês", list(range(1, 13)), index=datetime.now().month - 1)
+        with col_m2:
+            ano_sel = st.number_input("Ano", min_value=2024, max_value=2030, value=datetime.now().year)
+            
+        cal = calendar.monthcalendar(ano_sel, mes_sel)
+        dias_semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
         
-        if not df_agenda.empty:
-            st.dataframe(df_agenda, use_container_width=True)
-            
-            buffer_excel = io.BytesIO()
-            with pd.ExcelWriter(buffer_excel, engine='openpyxl') as writer:
-                df_agenda['AnoMes'] = pd.to_datetime(df_agenda['Data Prevista']).dt.strftime('%Y-%m (Mês)')
-                for mes, df_group in df_agenda.groupby('AnoMes'):
-                    df_group.drop(columns=['AnoMes']).to_excel(writer, sheet_name=str(mes)[:31], index=False)
-            buffer_excel.seek(0)
-            
-            st.download_button(
-                label="📊 Baixar Agenda em Formato Calendário (Excel por Mês)",
-                data=buffer_excel,
-                file_name=f"agenda_atividades_{datetime.now().strftime('%Y_%m')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            
-            st.divider()
-            col_ed1, col_ed2, col_ed3 = st.columns(3)
-            with col_ed1:
-                id_agenda = st.number_input("ID do Item", min_value=1, step=1)
-            with col_ed2:
-                novo_status = st.selectbox("Mudar Status Para", ["Realizado", "Não realizado", "Pendente"])
-            with col_ed3:
-                if st.button("🔄 Atualizar Status"):
+        st.markdown(f"### 🗓️ {calendar.month_name[mes_sel].capitalize()} de {ano_sel}")
+        
+        # Cabeçalho dos dias da semana
+        cols_header = st.columns(7)
+        for idx, dia_nome in enumerate(dias_semana):
+            cols_header[idx].markdown(f"**{dia_nome}**")
+
+        st.divider()
+
+        # Renderização da grade do calendário
+        for semana in cal:
+            cols_dia = st.columns(7)
+            for idx_dia, dia_num in enumerate(semana):
+                with cols_dia[idx_dia]:
+                    if dia_num != 0:
+                        data_str = f"{ano_sel}-{mes_sel:02d}-{dia_num:02d}"
+                        
+                        # Destaca se for o dia de hoje
+                        e_hoje = (data_str == datetime.now().strftime("%Y-%m-%d"))
+                        label_dia = f"**{dia_num}** 📍" if e_hoje else f"**{dia_num}**"
+                        st.markdown(label_dia)
+
+                        # Filtra tarefas do dia
+                        if not df_agenda.empty:
+                            tarefas_dia = df_agenda[df_agenda["Data Prevista"] == data_str]
+                            for _, item in tarefas_dia.iterrows():
+                                cor_status = "🟢" if item["Status"] == "Realizado" else ("🔴" if item["Status"] == "Não realizado" else "🟡")
+                                st.caption(f"{cor_status} #{item['ID']} - {item['Tarefa']}")
+                        st.markdown("---")
+                    else:
+                        st.write("")
+
+        # Tabela expansível abaixo do calendário para gestão rápida
+        with st.expander("📋 Ver Lista Completa de Tarefas e Gerenciar Status"):
+            if not df_agenda.empty:
+                st.dataframe(df_agenda, use_container_width=True)
+                
+                col_ed1, col_ed2, col_ed3 = st.columns(3)
+                with col_ed1:
+                    id_agenda = st.number_input("ID do Item", min_value=1, step=1)
+                with col_ed2:
+                    novo_status = st.selectbox("Mudar Status Para", ["Realizado", "Não realizado", "Pendente"])
+                with col_ed3:
+                    if st.button("🔄 Atualizar Status"):
+                        conn = sqlite3.connect(DB_FILE)
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE agenda SET status = ? WHERE id = ?", (novo_status, id_agenda))
+                        conn.commit()
+                        conn.close()
+                        st.success(f"Status do ID #{id_agenda} atualizado!")
+                        st.rerun()
+
+                if st.button("🗑️ Excluir Item da Agenda"):
                     conn = sqlite3.connect(DB_FILE)
                     cursor = conn.cursor()
-                    cursor.execute("UPDATE agenda SET status = ? WHERE id = ?", (novo_status, id_agenda))
+                    cursor.execute("DELETE FROM agenda WHERE id = ?", (id_agenda,))
                     conn.commit()
                     conn.close()
-                    st.success(f"Status do ID #{id_agenda} atualizado!")
+                    st.success(f"Item #{id_agenda} excluído!")
                     st.rerun()
-                    
-            if st.button("🗑️ Excluir Item da Agenda"):
-                conn = sqlite3.connect(DB_FILE)
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM agenda WHERE id = ?", (id_agenda,))
-                conn.commit()
-                conn.close()
-                st.success(f"Item #{id_agenda} excluído!")
-                st.rerun()
-        else:
-            st.info("Nenhuma atividade ou manutenção agendada.")
+            else:
+                st.info("Nenhuma atividade cadastrada.")
 
 elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "master":
     st.header("📂 Clientes & Histórico de Atendimentos")
