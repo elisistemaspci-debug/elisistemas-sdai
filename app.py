@@ -38,29 +38,19 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS reports (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT,
-            client TEXT,
-            date TEXT,
-            content TEXT,
-            type TEXT
+            title TEXT, client TEXT, date TEXT, content TEXT, type TEXT
         )
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS agenda (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task TEXT,
-            category TEXT, 
-            due_date TEXT,
-            status TEXT
+            task TEXT, category TEXT, due_date TEXT, status TEXT
         )
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS rascunhos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cliente TEXT,
-            data_visita TEXT,
-            dados_json TEXT,
-            atualizado_em TEXT
+            cliente TEXT, data_visita TEXT, dados_json TEXT, atualizado_em TEXT
         )
     ''')
     conn.commit()
@@ -73,8 +63,9 @@ def perform_backup():
     backup_path = os.path.join(BACKUP_DIR, f"backup_{timestamp}.db")
     if os.path.exists(DB_FILE):
         shutil.copyfile(DB_FILE, backup_path)
-        return backup_path
-    return None
+        with open(backup_path, "rb") as f:
+            return f.read(), f"backup_{timestamp}.db"
+    return None, None
 
 def restaurar_backup(uploaded_file):
     if uploaded_file is not None:
@@ -218,82 +209,6 @@ if not st.session_state["logged_in"]:
     st.stop()
 
 # --- FUNÇÕES DE PDF ---
-def gerar_pdf_calendario(ano=None, mes=None, incluir_tudo=False):
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=(A4[1], A4[0]), rightMargin=15, leftMargin=15, topMargin=15, bottomMargin=15)
-    story = []
-    styles = getSampleStyleSheet()
-
-    style_titulo = ParagraphStyle('CalTitulo', parent=styles['Heading1'], fontSize=14, leading=16, fontName='Helvetica-Bold', alignment=1)
-    style_dia_num = ParagraphStyle('DiaNum', parent=styles['Normal'], fontSize=9, leading=10, fontName='Helvetica-Bold', textColor=colors.HexColor("#2C3E50"))
-    style_tarefa = ParagraphStyle('TarefaCal', parent=styles['Normal'], fontSize=6.5, leading=7.5, textColor=colors.HexColor("#16A085"))
-    style_cab_dia = ParagraphStyle('CabDia', parent=styles['Normal'], fontSize=9, leading=10, fontName='Helvetica-Bold', alignment=1, textColor=colors.whitesmoke)
-
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT task, due_date, status FROM agenda ORDER BY due_date ASC")
-    rows = cursor.fetchall()
-    conn.close()
-
-    tarefas_por_dia = {}
-    for task, due_date, status in rows:
-        try:
-            dt = datetime.strptime(due_date, "%Y-%m-%d")
-            if incluir_tudo or (dt.year == ano and dt.month == mes):
-                d = dt.day if not incluir_tudo else f"{dt.day}/{dt.month}/{dt.year}"
-                if d not in tarefas_por_dia:
-                    tarefas_por_dia[d] = []
-                tarefas_por_dia[d].append((task, status, due_date))
-        except:
-            pass
-
-    meses_pt = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
-    
-    if incluir_tudo:
-        story.append(Paragraph("<b>RELATÓRIO COMPLETO DE TAREFAS E HISTÓRICO DA AGENDA</b>", style_titulo))
-    else:
-        story.append(Paragraph(f"<b>AGENDA DE MANUTENÇÕES & ATIVIDADES - {meses_pt[mes].upper()} / {ano}</b>", style_titulo))
-        
-    story.append(Paragraph(f"<font size=8>{empresa_db.get('nome', '')}</font>", ParagraphStyle('Sub', parent=styles['Normal'], alignment=1)))
-    story.append(Spacer(1, 8))
-
-    if not incluir_tudo and ano and mes:
-        dias_semana = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
-        tabela_dados = [[Paragraph(f"<b>{d}</b>", style_cab_dia) for d in dias_semana]]
-        cal = calendar.Calendar(firstweekday=0)
-        mes_matriz = cal.monthdayscalendar(ano, mes)
-
-        for semana in mes_matriz:
-            linha_semana = []
-            for dia in semana:
-                if dia == 0:
-                    linha_semana.append(Paragraph("", style_dia_num))
-                else:
-                    conteudo = [Paragraph(f"<b>{dia}</b>", style_dia_num)]
-                    if dia in tarefas_por_dia:
-                        for t_desc, t_stat, _ in tarefas_por_dia[dia]:
-                            check = "✔ " if t_stat == "Realizado" else "• "
-                            conteudo.append(Paragraph(f"{check}{t_desc}", style_tarefa))
-                    linha_semana.append(conteudo)
-            tabela_dados.append(linha_semana)
-
-        largura_col = 114
-        t_cal = Table(tabela_dados, colWidths=[largura_col]*7)
-        estilo_tabela = [
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
-            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#BDC3C7")),
-            ('TOPPADDING', (0, 0), (-1, -1), 3),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-        ]
-        t_cal.setStyle(TableStyle(estilo_tabela))
-        story.append(t_cal)
-
-    doc.build(story)
-    buffer.seek(0)
-    return buffer.getvalue()
-
 def gerar_pdf_preventiva():
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -301,11 +216,10 @@ def gerar_pdf_preventiva():
     styles = getSampleStyleSheet()
     
     style_celula = ParagraphStyle('CelTabela', parent=styles['Normal'], fontSize=8, leading=9, textColor=colors.black)
-    style_cabecalho_tabela = ParagraphStyle('CabTabela', parent=styles['Normal'], fontSize=8, leading=9, fontName='Helvetica-Bold', textColor=colors.whitesmoke, alignment=1)
     style_texto_empresa = ParagraphStyle('EmpresaText', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.black)
     style_sec_header = ParagraphStyle('SecHeader', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.black)
 
-    img_logo = Image(LOGO_PATH, width=45, height=30) if os.path.exists(LOGO_PATH) else Paragraph("<b>LOGO</b>", style_celula)
+    img_logo = Image(LOGO_PATH, width=50, height=35) if os.path.exists(LOGO_PATH) else Paragraph("<b>ELI SISTEMAS</b>", style_celula)
 
     info_empresa_texto = f"""
     <b>{empresa_db.get('nome', '')}</b><br/>
@@ -314,9 +228,9 @@ def gerar_pdf_preventiva():
     <b>RELATÓRIO DE INSPEÇÃO PREVENTIVA & MANUTENÇÃO NORMADA</b>
     """
     
-    tabela_cabecalho = Table([[Paragraph(info_empresa_texto, style_texto_empresa), img_logo]], colWidths=[495, 60])
+    tabela_cabecalho = Table([[Paragraph(info_empresa_texto, style_texto_empresa), img_logo]], colWidths=[485, 70])
     story.append(tabela_cabecalho)
-    story.append(Spacer(1, 4))
+    story.append(Spacer(1, 6))
 
     story.append(Paragraph("<b>1. DADOS DA EDIFICAÇÃO E IDENTIFICAÇÃO DA VISITA TÉCNICA</b>", style_sec_header))
     dados_edif = [
@@ -334,7 +248,10 @@ def gerar_pdf_preventiva():
 
     nome_cliente_atual = st.session_state.get('cliente', '').strip()
     if nome_cliente_atual:
-        registrar_historico_cliente(nome_cliente_atual, "Relatório de Vistoria Preventiva", {"status": "Gerado"})
+        registrar_historico_cliente(nome_cliente_atual, "Relatório de Vistoria Preventiva", {
+            "status_geral": st.session_state.get('status_geral', 'CONFORME'),
+            "resp_tecnico": st.session_state.get('resp_tecnico', empresa_db.get("resp_tecnico", "Eli Silva"))
+        })
 
     return pdf_data
 
@@ -394,12 +311,13 @@ with st.sidebar:
         
     menu = st.radio("Navegação Principal", opcoes_menu)
 
-# --- NAVEGAÇÃO DOS MÓDULOS (TODAS AS PÁGINAS ATIVAS) ---
+# --- CORPO DAS PÁGINAS ---
 
 if menu == "📋 Nova Vistoria / Laudo":
     st.header("📋 Emissão de Relatório / Vistoria Preventiva")
+    
     if clientes_db:
-        lista_cli = ["-- Selecionar Cliente Cadastrado --"] + list(clientes_db.keys())
+        lista_cli = ["-- Selecionar Cliente Cadastrado --"] + sorted(list(clientes_db.keys()))
         cli_sel = st.selectbox("Carregar Dados de Cliente Existente", lista_cli)
         if cli_sel != "-- Selecionar Cliente Cadastrado --":
             info_c = clientes_db[cli_sel]
@@ -408,51 +326,127 @@ if menu == "📋 Nova Vistoria / Laudo":
             st.session_state["endereco"] = info_c.get("endereco", "")
 
     st.subheader("1. Dados Gerais da Edificação")
-    st.session_state["cliente"] = st.text_input("Cliente / Condomínio", value=st.session_state["cliente"])
-    st.session_state["cnpj"] = st.text_input("CNPJ", value=st.session_state["cnpj"])
-    st.session_state["endereco"] = st.text_input("Endereço", value=st.session_state["endereco"])
+    col1, col2 = st.columns(2)
+    with col1:
+        st.session_state["cliente"] = st.text_input("Cliente / Condomínio", value=st.session_state["cliente"])
+        st.session_state["cnpj"] = st.text_input("CNPJ", value=st.session_state["cnpj"])
+    with col2:
+        st.session_state["endereco"] = st.text_input("Endereço", value=st.session_state["endereco"])
+        st.session_state["data_visita"] = st.date_input("Data da Visita", datetime.now()).strftime("%Y-%m-%d")
 
-    if st.button("📄 Gerar e Salvar PDF do Relatório", type="primary"):
-        pdf_bytes = gerar_pdf_preventiva()
-        st.success("Relatório gerado!")
-        st.download_button("💾 Baixar Relatório PDF", pdf_bytes, file_name=f"Vistoria_{st.session_state['cliente']}.pdf", mime="application/pdf")
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("💾 Salvar Rascunho da Vistoria", type="secondary"):
+            if st.session_state["cliente"]:
+                conn = sqlite3.connect(DB_FILE)
+                cursor = conn.cursor()
+                dados_json = json.dumps({"cnpj": st.session_state["cnpj"], "endereco": st.session_state["endereco"]})
+                cursor.execute(
+                    "INSERT INTO rascunhos (cliente, data_visita, dados_json, atualizado_em) VALUES (?, ?, ?, ?)",
+                    (st.session_state["cliente"], st.session_state["data_visita"], dados_json, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                )
+                conn.commit()
+                conn.close()
+                st.success("Rascunho salvo com sucesso!")
+            else:
+                st.error("Informe o nome do cliente para salvar o rascunho.")
 
-elif menu == "🏢 Dados da Empresa":
-    st.header("🏢 Configuração dos Dados da Empresa")
-    st.write("Estes dados serão exibidos no cabeçalho dos relatórios e documentos gerados.")
+    with col_btn2:
+        if st.button("📄 Gerar e Salvar PDF do Relatório", type="primary"):
+            pdf_bytes = gerar_pdf_preventiva()
+            st.success("Relatório gerado e registrado no histórico!")
+            st.download_button("💾 Baixar Relatório PDF", pdf_bytes, file_name=f"Vistoria_{st.session_state['cliente']}.pdf", mime="application/pdf")
+
+elif menu == "📂 Rascunhos de Vistoria":
+    st.header("📂 Rascunhos de Vistoria")
     
-    with st.form("form_dados_empresa"):
-        nome_emp = st.text_input("Razão Social / Nome da Empresa", value=empresa_db.get("nome", ""))
-        cnpj_emp = st.text_input("CNPJ", value=empresa_db.get("cnpj", ""))
-        crea_emp = st.text_input("Registro CREA", value=empresa_db.get("crea", ""))
-        tel_emp = st.text_input("Telefone de Contato", value=empresa_db.get("telefone", ""))
-        email_emp = st.text_input("E-mail Oficial", value=empresa_db.get("email", ""))
-        end_emp = st.text_input("Endereço Completo", value=empresa_db.get("endereco", ""))
-        resp_emp = st.text_input("Responsável Técnico Padrão", value=empresa_db.get("resp_tecnico", ""))
+    conn = sqlite3.connect(DB_FILE)
+    df_rascunhos = pd.read_sql_query("SELECT id, cliente AS Cliente, data_visita AS 'Data Visita', atualizado_em AS 'Atualizado Em' FROM rascunhos ORDER BY id DESC", conn)
+    conn.close()
+    
+    if not df_rascunhos.empty:
+        st.dataframe(df_rascunhos, use_container_width=True)
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            id_carregar = st.number_input("ID do Rascunho para Carregar/Excluir", min_value=1, step=1)
+        with col_r2:
+            if st.button("🗑️ Excluir Rascunho"):
+                conn = sqlite3.connect(DB_FILE)
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM rascunhos WHERE id = ?", (id_carregar,))
+                conn.commit()
+                conn.close()
+                st.success(f"Rascunho #{id_carregar} excluído!")
+                st.rerun()
+    else:
+        st.info("Nenhum rascunho pendente registrado.")
+
+elif menu == "📅 Agenda de Manutenções":
+    st.header("📅 Agenda de Manutenções & Cobranças")
+    
+    tab_a1, tab_a2 = st.tabs(["📋 Visualizar e Gerenciar Agenda", "➕ Nova Atividade / Registro"])
+    
+    with tab_a2:
+        with st.form("form_nova_agenda"):
+            nova_tarefa = st.text_input("Descrição da Tarefa / Atividade / Cobrança")
+            categoria = st.selectbox("Categoria", ["Atividade Técnica", "Manutenção Preventiva", "Cobrança / Pagamento"])
+            data_prev = st.date_input("Data Prevista", datetime.now())
+            status_inicial = st.selectbox("Status", ["Não realizado", "Realizado", "Pendente"])
+            
+            if st.form_submit_button("➕ Adicionar à Agenda"):
+                if nova_tarefa:
+                    conn = sqlite3.connect(DB_FILE)
+                    cursor = conn.cursor()
+                    cursor.execute("INSERT INTO agenda (task, category, due_date, status) VALUES (?, ?, ?, ?)",
+                                   (nova_tarefa, categoria, data_prev.strftime("%Y-%m-%d"), status_inicial))
+                    conn.commit()
+                    conn.close()
+                    st.success("Item adicionado à agenda!")
+                    st.rerun()
+
+    with tab_a1:
+        conn = sqlite3.connect(DB_FILE)
+        df_agenda = pd.read_sql_query("SELECT id AS ID, task AS Tarefa, category AS Categoria, due_date AS 'Data Prevista', status AS Status FROM agenda ORDER BY due_date ASC", conn)
+        conn.close()
         
-        btn_salvar_empresa = st.form_submit_button("💾 Salvar Alterações", type="primary")
-        if btn_salvar_empresa:
-            empresa_db.update({
-                "nome": nome_emp,
-                "cnpj": cnpj_emp,
-                "crea": crea_emp,
-                "telefone": tel_emp,
-                "email": email_emp,
-                "endereco": end_emp,
-                "resp_tecnico": resp_emp
-            })
-            salvar_json(EMPRESA_FILE, empresa_db)
-            st.success("Dados da empresa atualizados com sucesso!")
+        if not df_agenda.empty:
+            st.dataframe(df_agenda, use_container_width=True)
+            
+            col_ed1, col_ed2, col_ed3 = st.columns(3)
+            with col_ed1:
+                id_agenda = st.number_input("ID do Item", min_value=1, step=1)
+            with col_ed2:
+                novo_status = st.selectbox("Mudar Status Para", ["Realizado", "Não realizado", "Pendente"])
+            with col_ed3:
+                if st.button("🔄 Atualizar Status"):
+                    conn = sqlite3.connect(DB_FILE)
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE agenda SET status = ? WHERE id = ?", (novo_status, id_agenda))
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Status do ID #{id_agenda} atualizado!")
+                    st.rerun()
+                    
+            if st.button("🗑️ Excluir Item da Agenda"):
+                conn = sqlite3.connect(DB_FILE)
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM agenda WHERE id = ?", (id_agenda,))
+                conn.commit()
+                conn.close()
+                st.success(f"Item #{id_agenda} excluído!")
+                st.rerun()
+        else:
+            st.info("Nenhuma manutenção ou cobrança agendada.")
 
 elif menu == "📂 Clientes & Histórico":
-    st.header("📂 Gestão de Clientes e Histórico de Visitas")
+    st.header("📂 Clientes & Histórico de Atendimentos")
     
-    tab_c1, tab_c2 = st.tabs(["➕ Cadastrar / Editar Cliente", "🔍 Consultar Clientes e Histórico"])
+    tab_c1, tab_c2, tab_c3 = st.tabs(["🔍 Consultar Clientes e Histórico", "➕ Cadastrar / Editar Cliente", "🗑️ Gerenciar / Excluir Cliente"])
     
-    with tab_c1:
-        st.subheader("Novo Cliente")
+    with tab_c2:
+        st.subheader("Cadastrar ou Editar Cliente")
         with st.form("form_novo_cliente"):
-            nome_cli = st.text_input("Nome do Cliente / Condomínio")
+            nome_cli = st.text_input("Nome do Cliente / Condomínio (Ex: CONDOMÍNIO PRAÇAS DO GOLF RESORT I)")
             cnpj_cli = st.text_input("CNPJ")
             end_cli = st.text_input("Endereço")
             cid_cli = st.text_input("Cidade / UF", value="Ribeirão Preto - SP")
@@ -461,9 +455,10 @@ elif menu == "📂 Clientes & Histórico":
             tel_cli = st.text_input("Telefone")
             email_cli = st.text_input("E-mail")
             
-            if st.form_submit_button("Salvar Cliente"):
+            if st.form_submit_button("💾 Salvar / Atualizar Cliente"):
                 if nome_cli:
-                    clientes_db[nome_cli] = {
+                    nome_formatado = nome_cli.strip().upper()
+                    clientes_db[nome_formatado] = {
                         "cnpj": cnpj_cli,
                         "endereco": end_cli,
                         "cidade_uf": cid_cli,
@@ -473,22 +468,31 @@ elif menu == "📂 Clientes & Histórico":
                         "email": email_cli
                     }
                     salvar_json(CLIENTES_FILE, clientes_db)
-                    st.success(f"Cliente '{nome_cli}' cadastrado com sucesso!")
+                    st.success(f"Cliente '{nome_formatado}' gravado com sucesso!")
                     st.rerun()
                 else:
                     st.error("Informe o nome do cliente.")
-                    
-    with tab_c2:
+
+    with tab_c3:
+        st.subheader("Excluir Cliente")
+        if clientes_db:
+            cli_excluir = st.selectbox("Selecione o Cliente para Excluir", list(clientes_db.keys()), key="del_cli_select")
+            if st.button("🗑️ Confirmar Exclusão de Cliente", type="primary"):
+                del clientes_db[cli_excluir]
+                salvar_json(CLIENTES_FILE, clientes_db)
+                st.success(f"Cliente '{cli_excluir}' removido com sucesso!")
+                st.rerun()
+
+    with tab_c1:
         st.subheader("Base de Clientes")
         if clientes_db:
-            cli_selecionado = st.selectbox("Selecione um Cliente", list(clientes_db.keys()))
+            cli_selecionado = st.selectbox("Selecione um Cliente", sorted(list(clientes_db.keys())))
             if cli_selecionado:
                 info = clientes_db[cli_selecionado]
                 st.write(f"**CNPJ:** {info.get('cnpj', '')}")
                 st.write(f"**Endereço:** {info.get('endereco', '')}")
                 st.write(f"**Telefone:** {info.get('telefone', '')}")
                 
-                # Histórico de Atendimentos
                 nome_pasta_cliente = "".join(c for c in cli_selecionado.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
                 cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
                 historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
@@ -497,22 +501,50 @@ elif menu == "📂 Clientes & Histórico":
                 if os.path.exists(historico_path):
                     with open(historico_path, "r", encoding="utf-8") as f_h:
                         hist_data = json.load(f_h)
-                    st.dataframe(pd.DataFrame(hist_data), use_container_width=True)
+                    df_hist = pd.DataFrame(hist_data)
+                    st.dataframe(df_hist, use_container_width=True)
+                    
+                    if st.button("🧹 Limpar Histórico do Cliente"):
+                        os.remove(historico_path)
+                        st.success("Histórico deste cliente foi limpo.")
+                        st.rerun()
                 else:
                     st.info("Nenhum histórico gravado para este cliente até o momento.")
         else:
             st.info("Nenhum cliente cadastrado no sistema.")
 
-elif menu == "📂 Rascunhos de Vistoria":
-    st.header("📂 Rascunhos Salvamente Temporário")
-    conn = sqlite3.connect(DB_FILE)
-    df_rascunhos = pd.read_sql_query("SELECT id, cliente, data_visita, atualizado_em FROM rascunhos ORDER BY id DESC", conn)
-    conn.close()
+elif menu == "🏢 Dados da Empresa":
+    st.header("🏢 Dados da Empresa & Logotipo")
     
-    if not df_rascunhos.empty:
-        st.dataframe(df_rascunhos, use_container_width=True)
-    else:
-        st.info("Nenhum rascunho pendente.")
+    st.subheader("1. Logotipo Oficial")
+    if os.path.exists(LOGO_PATH):
+        st.image(LOGO_PATH, width=180, caption="Logotipo Cadastrado")
+    
+    logo_upload = st.file_uploader("Upload do Logotipo (PNG ou JPG)", type=["png", "jpg", "jpeg"])
+    if logo_upload is not None:
+        with open(LOGO_PATH, "wb") as f:
+            f.write(logo_upload.getbuffer())
+        st.success("Novo logotipo salvo com sucesso!")
+        st.rerun()
+
+    st.subheader("2. Informações Cadastrais")
+    with st.form("form_dados_empresa"):
+        nome_emp = st.text_input("Razão Social / Nome da Empresa", value=empresa_db.get("nome", ""))
+        cnpj_emp = st.text_input("CNPJ", value=empresa_db.get("cnpj", ""))
+        crea_emp = st.text_input("Registro CREA", value=empresa_db.get("crea", ""))
+        tel_emp = st.text_input("Telefone de Contato", value=empresa_db.get("telefone", ""))
+        email_emp = st.text_input("E-mail Oficial", value=empresa_db.get("email", ""))
+        end_emp = st.text_input("Endereço Completo", value=empresa_db.get("endereco", ""))
+        resp_emp = st.text_input("Responsável Técnico Padrão", value=empresa_db.get("resp_tecnico", ""))
+        
+        if st.form_submit_button("💾 Salvar Dados da Empresa", type="primary"):
+            empresa_db.update({
+                "nome": nome_emp, "cnpj": cnpj_emp, "crea": crea_emp,
+                "telefone": tel_emp, "email": email_emp, "endereco": end_emp,
+                "resp_tecnico": resp_emp
+            })
+            salvar_json(EMPRESA_FILE, empresa_db)
+            st.success("Dados da empresa atualizados com sucesso!")
 
 elif menu == "👥 Gestão de Usuários":
     st.header("👥 Gestão de Usuários do Sistema")
@@ -521,9 +553,9 @@ elif menu == "👥 Gestão de Usuários":
         novo_u = st.text_input("Usuário")
         nova_s = st.text_input("Senha", type="password")
         novo_p = st.selectbox("Perfil de Acesso", ["master", "cliente"])
-        cli_vinc = st.selectbox("Vincular a Cliente (Se perfil Cliente)", [""] + list(clientes_db.keys()))
+        cli_vinc = st.selectbox("Vincular a Cliente (Se perfil Cliente)", [""] + sorted(list(clientes_db.keys())))
         
-        if st.form_submit_button("Cadastrar Usuário"):
+        if st.form_submit_button("Cadastrar / Atualizar Usuário"):
             if novo_u and nova_s:
                 usuarios[novo_u] = {"senha": nova_s, "perfil": novo_p, "cliente_vinculado": cli_vinc}
                 salvar_json(USUARIOS_FILE, usuarios)
@@ -534,34 +566,49 @@ elif menu == "🎫 Chamados Técnicos":
     st.header("🎫 Chamados Técnicos")
     
     with st.form("form_chamado"):
+        cli_chamado = st.selectbox("Selecione o Cliente Vinculado", sorted(list(clientes_db.keys())) if clientes_db else ["Geral"])
         titulo_ch = st.text_input("Título do Chamado")
         desc_ch = st.text_area("Descrição do Problema / Solicitação")
-        if st.form_submit_button("Abrir Chamado"):
-            chamados_db.append({
-                "usuario": st.session_state["user"],
-                "cliente": st.session_state.get("cliente_vinculado", "Geral"),
-                "titulo": titulo_ch,
-                "descricao": desc_ch,
-                "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "Aberto"
-            })
-            salvar_json(CHAMADOS_FILE, chamados_db)
-            st.success("Chamado registrado!")
-            st.rerun()
+        
+        if st.form_submit_button("📩 ABRIR CHAMADO", type="primary"):
+            if titulo_ch and desc_ch:
+                chamados_db.append({
+                    "usuario": st.session_state["user"],
+                    "cliente": cli_chamado,
+                    "titulo": titulo_ch,
+                    "descricao": desc_ch,
+                    "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "status": "Aberto"
+                })
+                salvar_json(CHAMADOS_FILE, chamados_db)
+                st.success("Chamado registrado com sucesso!")
+                st.rerun()
+            else:
+                st.error("Preencha o título e a descrição.")
 
     st.subheader("Chamados Registrados")
-    st.dataframe(pd.DataFrame(chamados_db), use_container_width=True)
-
-elif menu == "📅 Agenda de Manutenções":
-    st.header("📅 Agenda de Manutenções")
-    conn = sqlite3.connect(DB_FILE)
-    df_agenda = pd.read_sql_query("SELECT id, task AS Tarefa, category AS Categoria, due_date AS Data, status AS Status FROM agenda ORDER BY due_date ASC", conn)
-    conn.close()
-    st.dataframe(df_agenda, use_container_width=True)
+    if chamados_db:
+        st.dataframe(pd.DataFrame(chamados_db), use_container_width=True)
+    else:
+        st.info("Nenhum chamado aberto até o momento.")
 
 elif menu == "💾 Backup & Restauração":
-    st.header("💾 Central de Backup")
-    if st.button("📦 Executar Backup Agora"):
-        b_path = perform_backup()
-        if b_path:
-            st.success(f"Backup realizado: `{b_path}`")
+    st.header("💾 Backup e Restauração de Dados")
+    
+    col_b1, col_b2 = st.columns(2)
+    with col_b1:
+        st.subheader("1. Fazer Backup")
+        if st.button("📦 Gerar Arquivo de Backup"):
+            data_bytes, file_name = perform_backup()
+            if data_bytes:
+                st.success(f"Backup gerado: `{file_name}`")
+                st.download_button("⬇️ Baixar Backup (.db)", data_bytes, file_name=file_name, mime="application/x-sqlite3")
+
+    with col_b2:
+        st.subheader("2. Restaurar Backup")
+        uploaded_backup = st.file_uploader("Carregar arquivo de backup (.db)", type=["db"])
+        if uploaded_backup is not None:
+            if st.button("⚠️ Restaurar Banco de Dados", type="primary"):
+                if restaurar_backup(uploaded_backup):
+                    st.success("Banco de dados restaurado com sucesso! Recarregue a página.")
+                    st.rerun()
