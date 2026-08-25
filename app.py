@@ -295,6 +295,7 @@ with st.sidebar:
         
     st.divider()
 
+    # Ocupa o menu "Clientes & Histórico" APENAS para o usuário MASTER
     if st.session_state["perfil"] == "master":
         opcoes_menu = [
             "📋 Nova Vistoria / Laudo", 
@@ -307,7 +308,8 @@ with st.sidebar:
             "💾 Backup & Restauração"
         ]
     else:
-        opcoes_menu = ["🎫 Chamados Técnicos", "📂 Clientes & Histórico"]
+        # Usuários de perfil 'cliente' enxergam apenas os Chamados Técnicos
+        opcoes_menu = ["🎫 Chamados Técnicos"]
         
     menu = st.radio("Navegação Principal", opcoes_menu)
 
@@ -476,7 +478,6 @@ elif menu == "📅 Agenda de Atividades":
         if not df_agenda.empty:
             st.dataframe(df_agenda, use_container_width=True)
             
-            # EXPORTAÇÃO EM FORMATO CALENDÁRIO EXCEL USANDO OPENPYXL
             buffer_excel = io.BytesIO()
             with pd.ExcelWriter(buffer_excel, engine='openpyxl') as writer:
                 df_agenda['AnoMes'] = pd.to_datetime(df_agenda['Data Prevista']).dt.strftime('%Y-%m (Mês)')
@@ -518,114 +519,84 @@ elif menu == "📅 Agenda de Atividades":
         else:
             st.info("Nenhuma atividade ou manutenção agendada.")
 
-elif menu == "📂 Clientes & Histórico":
+elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "master":
     st.header("📂 Clientes & Histórico de Atendimentos")
     
-    # SE FOR PERFIL MASTER: Exibe as 3 abas (Consulta, Cadastro/Edição, Exclusão)
-    if st.session_state["perfil"] == "master":
-        tab_c1, tab_c2, tab_c3 = st.tabs([
-            "🔍 Consultar Clientes e Histórico", 
-            "➕ Cadastrar / Editar Cliente", 
-            "🗑️ Gerenciar / Excluir Cliente"
-        ])
-        
-        with tab_c2:
-            st.subheader("Cadastrar ou Editar Cliente")
-            with st.form("form_novo_cliente"):
-                nome_cli = st.text_input("Nome do Cliente / Condomínio (Ex: CONDOMÍNIO PRAÇAS DO GOLF RESORT I)")
-                cnpj_cli = st.text_input("CNPJ")
-                end_cli = st.text_input("Endereço")
-                cid_cli = st.text_input("Cidade / UF", value="Ribeirão Preto - SP")
-                sindico_cli = st.text_input("Síndico")
-                zelador_cli = st.text_input("Zelador")
-                tel_cli = st.text_input("Telefone")
-                email_cli = st.text_input("E-mail")
-                
-                if st.form_submit_button("💾 Salvar / Atualizar Cliente"):
-                    if nome_cli:
-                        nome_formatado = nome_cli.strip().upper()
-                        clientes_db[nome_formatado] = {
-                            "cnpj": cnpj_cli,
-                            "endereco": end_cli,
-                            "cidade_uf": cid_cli,
-                            "sindico": sindico_cli,
-                            "zelador": zelador_cli,
-                            "telefone": tel_cli,
-                            "email": email_cli
-                        }
-                        salvar_json(CLIENTES_FILE, clientes_db)
-                        st.success(f"Cliente '{nome_formatado}' gravado com sucesso!")
-                        st.rerun()
-                    else:
-                        st.error("Informe o nome do cliente.")
-
-        with tab_c3:
-            st.subheader("Excluir Cliente")
-            if clientes_db:
-                cli_excluir = st.selectbox("Selecione o Cliente para Excluir", list(clientes_db.keys()), key="del_cli_select")
-                if st.button("🗑️ Confirmar Exclusão de Cliente", type="primary"):
-                    del clientes_db[cli_excluir]
+    tab_c1, tab_c2, tab_c3 = st.tabs([
+        "🔍 Consultar Clientes e Histórico", 
+        "➕ Cadastrar / Editar Cliente", 
+        "🗑️ Gerenciar / Excluir Cliente"
+    ])
+    
+    with tab_c2:
+        st.subheader("Cadastrar ou Editar Cliente")
+        with st.form("form_novo_cliente"):
+            nome_cli = st.text_input("Nome do Cliente / Condomínio (Ex: CONDOMÍNIO PRAÇAS DO GOLF RESORT I)")
+            cnpj_cli = st.text_input("CNPJ")
+            end_cli = st.text_input("Endereço")
+            cid_cli = st.text_input("Cidade / UF", value="Ribeirão Preto - SP")
+            sindico_cli = st.text_input("Síndico")
+            zelador_cli = st.text_input("Zelador")
+            tel_cli = st.text_input("Telefone")
+            email_cli = st.text_input("E-mail")
+            
+            if st.form_submit_button("💾 Salvar / Atualizar Cliente"):
+                if nome_cli:
+                    nome_formatado = nome_cli.strip().upper()
+                    clientes_db[nome_formatado] = {
+                        "cnpj": cnpj_cli,
+                        "endereco": end_cli,
+                        "cidade_uf": cid_cli,
+                        "sindico": sindico_cli,
+                        "zelador": zelador_cli,
+                        "telefone": tel_cli,
+                        "email": email_cli
+                    }
                     salvar_json(CLIENTES_FILE, clientes_db)
-                    st.success(f"Cliente '{cli_excluir}' removido com sucesso!")
+                    st.success(f"Cliente '{nome_formatado}' gravado com sucesso!")
                     st.rerun()
+                else:
+                    st.error("Informe o nome do cliente.")
 
-        with tab_c1:
-            st.subheader("Base de Clientes")
-            if clientes_db:
-                cli_selecionado = st.selectbox("Selecione um Cliente", sorted(list(clientes_db.keys())))
-                if cli_selecionado:
-                    info = clientes_db[cli_selecionado]
-                    st.write(f"**CNPJ:** {info.get('cnpj', '')}")
-                    st.write(f"**Endereço:** {info.get('endereco', '')}")
-                    st.write(f"**Telefone:** {info.get('telefone', '')}")
-                    
-                    nome_pasta_cliente = "".join(c for c in cli_selecionado.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
-                    cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
-                    historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
-                    
-                    st.subheader("📜 Histórico de Atendimentos & Documentos")
-                    if os.path.exists(historico_path):
-                        with open(historico_path, "r", encoding="utf-8") as f_h:
-                            hist_data = json.load(f_h)
-                        df_hist = pd.DataFrame(hist_data)
-                        st.dataframe(df_hist, use_container_width=True)
-                        
-                        if st.button("🧹 Limpar Histórico do Cliente"):
-                            os.remove(historico_path)
-                            st.success("Histórico deste cliente foi limpo.")
-                            st.rerun()
-                    else:
-                        st.info("Nenhum histórico gravado para este cliente até o momento.")
-            else:
-                st.info("Nenhum cliente cadastrado no sistema.")
+    with tab_c3:
+        st.subheader("Excluir Cliente")
+        if clientes_db:
+            cli_excluir = st.selectbox("Selecione o Cliente para Excluir", list(clientes_db.keys()), key="del_cli_select")
+            if st.button("🗑️ Confirmar Exclusão de Cliente", type="primary"):
+                del clientes_db[cli_excluir]
+                salvar_json(CLIENTES_FILE, clientes_db)
+                st.success(f"Cliente '{cli_excluir}' removido com sucesso!")
+                st.rerun()
 
-    # SE FOR PERFIL CLIENTE: Oculta cadastro/edição/deleção e mostra APENAS os dados do cliente vinculado
-    else:
-        cli_vinculado = st.session_state.get("cliente_vinculado", "")
-        
-        if cli_vinculado and cli_vinculado in clientes_db:
-            info = clientes_db[cli_vinculado]
-            st.subheader(f"🏢 {cli_vinculado}")
-            st.write(f"**CNPJ:** {info.get('cnpj', '')}")
-            st.write(f"**Endereço:** {info.get('endereco', '')}")
-            st.write(f"**Telefone:** {info.get('telefone', '')}")
-            
-            st.divider()
-            st.subheader("📜 Meus Relatórios & Vistorias Realizadas")
-            
-            nome_pasta_cliente = "".join(c for c in cli_vinculado.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
-            cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
-            historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
-            
-            if os.path.exists(historico_path):
-                with open(historico_path, "r", encoding="utf-8") as f_h:
-                    hist_data = json.load(f_h)
-                df_hist = pd.DataFrame(hist_data)
-                st.dataframe(df_hist, use_container_width=True)
-            else:
-                st.info("Nenhum histórico ou relatório gravado para este condomínio até o momento.")
+    with tab_c1:
+        st.subheader("Base de Clientes")
+        if clientes_db:
+            cli_selecionado = st.selectbox("Selecione um Cliente", sorted(list(clientes_db.keys())))
+            if cli_selecionado:
+                info = clientes_db[cli_selecionado]
+                st.write(f"**CNPJ:** {info.get('cnpj', '')}")
+                st.write(f"**Endereço:** {info.get('endereco', '')}")
+                st.write(f"**Telefone:** {info.get('telefone', '')}")
+                
+                nome_pasta_cliente = "".join(c for c in cli_selecionado.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
+                cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
+                historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
+                
+                st.subheader("📜 Histórico de Atendimentos & Documentos")
+                if os.path.exists(historico_path):
+                    with open(historico_path, "r", encoding="utf-8") as f_h:
+                        hist_data = json.load(f_h)
+                    df_hist = pd.DataFrame(hist_data)
+                    st.dataframe(df_hist, use_container_width=True)
+                    
+                    if st.button("🧹 Limpar Histórico do Cliente"):
+                        os.remove(historico_path)
+                        st.success("Histórico deste cliente foi limpo.")
+                        st.rerun()
+                else:
+                    st.info("Nenhum histórico gravado para este cliente até o momento.")
         else:
-            st.warning("Usuário não possui um cliente vinculado. Solicite o vínculo ao administrador.")
+            st.info("Nenhum cliente cadastrado no sistema.")
 
 elif menu == "🏢 Dados da Empresa":
     st.header("🏢 Dados da Empresa & Logotipo")
