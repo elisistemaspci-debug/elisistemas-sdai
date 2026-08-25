@@ -3,7 +3,7 @@ import io
 import json
 import sqlite3
 import shutil
-import calendar
+import hashlib
 from datetime import datetime
 import streamlit as st
 import pandas as pd
@@ -299,7 +299,7 @@ with st.sidebar:
         opcoes_menu = [
             "📋 Nova Vistoria / Laudo", 
             "📂 Rascunhos de Vistoria", 
-            "📅 Agenda de Manutenções", 
+            "📅 Agenda de Atividades", 
             "📂 Clientes & Histórico", 
             "🏢 Dados da Empresa", 
             "👥 Gestão de Usuários",
@@ -330,10 +330,74 @@ if menu == "📋 Nova Vistoria / Laudo":
     with col1:
         st.session_state["cliente"] = st.text_input("Cliente / Condomínio", value=st.session_state["cliente"])
         st.session_state["cnpj"] = st.text_input("CNPJ", value=st.session_state["cnpj"])
+        st.session_state["sindico"] = st.text_input("Síndico(a)", value=st.session_state["sindico"])
+        st.session_state["contato"] = st.text_input("Contato / Telefone", value=st.session_state["contato"])
     with col2:
         st.session_state["endereco"] = st.text_input("Endereço", value=st.session_state["endereco"])
         st.session_state["data_visita"] = st.date_input("Data da Visita", datetime.now()).strftime("%Y-%m-%d")
+        st.session_state["zelador"] = st.text_input("Zelador / Resp. Local", value=st.session_state["zelador"])
+        st.session_state["email"] = st.text_input("E-mail do Cliente", value=st.session_state["email"])
 
+    st.subheader("2. Caracterização Técnica e Equipamentos Instalados")
+    col2_1, col2_2, col2_3 = st.columns(3)
+    with col2_1:
+        st.session_state["central_sdai"] = st.text_input("Marca / Modelo da Central", value=st.session_state["central_sdai"])
+        st.session_state["det_fumaca"] = st.text_input("Qtd. Detectores (Fumaça/Térmico)", value=st.session_state["det_fumaca"])
+        st.session_state["tensao_baterias"] = st.text_input("Tensão Baterias (Vcc)", value=st.session_state["tensao_baterias"])
+    with col2_2:
+        st.session_state["tipo_central"] = st.selectbox("Tipo de Sistema", ["SISTEMA ENDEREÇÁVEL", "SISTEMA CONVENCIONAL"], index=0 if st.session_state["tipo_central"] == "SISTEMA ENDEREÇÁVEL" else 1)
+        st.session_state["acionadores"] = st.text_input("Qtd. Acionadores Manuais", value=st.session_state["acionadores"])
+        st.session_state["pressurizacao"] = st.selectbox("Possui Pressurização de Escada?", ["Sim", "Não", "Não Aplicável"], index=0)
+    with col2_3:
+        st.session_state["qtd_lacos"] = st.text_input("Quantidade de Laços / Zonas", value=st.session_state["qtd_lacos"])
+        st.session_state["avisadores"] = st.text_input("Qtd. Avisadores Sonoros/Visuais", value=st.session_state["avisadores"])
+        st.session_state["status_geral"] = st.selectbox("Status Geral da Vistoria", ["CONFORME / SISTEMA OPERACIONAL", "SISTEMA COM ANOMALIAS / NECESSITA REPAROS", "CRÍTICO / OPERAÇÃO PARCIAL"], index=0)
+
+    # RENDERIZAÇÃO DAS SEÇÕES 3, 4, 5 e 6
+    titulos_secoes = {
+        "sec3": "3. Inspeção e Testes Funcionais da Central / Fonte Auxiliar",
+        "sec4": "4. Infraestrutura e Laços de Comunicação (SDAI)",
+        "sec5": "5. Dispositivos de Campo e Testes Amostrais",
+        "sec6": "6. Automações, Sinais de Intertravamento e Segurança"
+    }
+
+    for sec_key, titulo_sec in titulos_secoes.items():
+        st.subheader(titulo_sec)
+        for idx, (item_nome, norma_ref) in enumerate(ITENS_SECOES[sec_key]):
+            c_a, c_b, c_c, c_d = st.columns([2.5, 1.5, 1.5, 2.5])
+            with c_a:
+                st.caption(f"**{item_nome}**\n*{norma_ref}*")
+            with c_b:
+                st.session_state[f"{sec_key}_{idx}_status"] = st.selectbox(f"Status", ["CONFORME", "NÃO CONFORME", "NÃO APLICÁVEL"], key=f"st_{sec_key}_{idx}", label_visibility="collapsed")
+            with c_c:
+                st.session_state[f"{sec_key}_{idx}_val"] = st.text_input("Medição/Valor", value=st.session_state[f"{sec_key}_{idx}_val"], key=f"vl_{sec_key}_{idx}", placeholder="Ex: 27.2V", label_visibility="collapsed")
+            with c_d:
+                st.session_state[f"{sec_key}_{idx}_obs"] = st.text_input("Observação", value=st.session_state[f"{sec_key}_{idx}_obs"], key=f"ob_{sec_key}_{idx}", placeholder="Detalhes", label_visibility="collapsed")
+
+    st.subheader("7. Registro Fotográfico da Inspeção")
+    uploaded_files = st.file_uploader("Carregar Fotos da Vistoria (Evita fotos duplicadas automaticamente)", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+    
+    if uploaded_files:
+        fotos_processadas = set()
+        novas_fotos = []
+        for file in uploaded_files:
+            file_bytes = file.getvalue()
+            file_hash = hashlib.md5(file_bytes).hexdigest()
+            if file_hash not in fotos_processadas:
+                fotos_processadas.add(file_hash)
+                nome_foto = f"{file_hash}_{file.name}"
+                caminho_foto = os.path.join(PASTA_FOTOS_VISTORIA, nome_foto)
+                with open(caminho_foto, "wb") as f_img:
+                    f_img.write(file_bytes)
+                novas_fotos.append(caminho_foto)
+        st.session_state["fotos_carregadas"] = novas_fotos
+        st.success(f"{len(novas_fotos)} foto(s) única(s) vinculada(s) à vistoria!")
+
+    st.subheader("8. Parecer Técnico e Recomendações")
+    st.session_state["parecer"] = st.text_area("Parecer Técnico Geral", value=st.session_state["parecer"], height=100)
+    st.session_state["orientacoes"] = st.text_area("Recomendações e Ações Corretivas", value=st.session_state["orientacoes"], height=100)
+
+    st.divider()
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
         if st.button("💾 Salvar Rascunho da Vistoria", type="secondary"):
@@ -368,7 +432,7 @@ elif menu == "📂 Rascunhos de Vistoria":
         st.dataframe(df_rascunhos, use_container_width=True)
         col_r1, col_r2 = st.columns(2)
         with col_r1:
-            id_carregar = st.number_input("ID do Rascunho para Carregar/Excluir", min_value=1, step=1)
+            id_carregar = st.number_input("ID do Rascunho para Excluir", min_value=1, step=1)
         with col_r2:
             if st.button("🗑️ Excluir Rascunho"):
                 conn = sqlite3.connect(DB_FILE)
@@ -381,8 +445,8 @@ elif menu == "📂 Rascunhos de Vistoria":
     else:
         st.info("Nenhum rascunho pendente registrado.")
 
-elif menu == "📅 Agenda de Manutenções":
-    st.header("📅 Agenda de Manutenções & Cobranças")
+elif menu == "📅 Agenda de Atividades":
+    st.header("📅 Agenda de Atividades & Manutenções")
     
     tab_a1, tab_a2 = st.tabs(["📋 Visualizar e Gerenciar Agenda", "➕ Nova Atividade / Registro"])
     
@@ -412,6 +476,22 @@ elif menu == "📅 Agenda de Manutenções":
         if not df_agenda.empty:
             st.dataframe(df_agenda, use_container_width=True)
             
+            # EXPORTAÇÃO EM FORMATO CALENDÁRIO EXCEL (MÊS A MÊS)
+            buffer_excel = io.BytesIO()
+            with pd.ExcelWriter(buffer_excel, engine='xlsxwriter') as writer:
+                df_agenda['AnoMes'] = pd.to_datetime(df_agenda['Data Prevista']).dt.strftime('%Y-%m (Mês)')
+                for mes, df_group in df_agenda.groupby('AnoMes'):
+                    df_group.drop(columns=['AnoMes']).to_excel(writer, sheet_name=str(mes)[:31], index=False)
+            buffer_excel.seek(0)
+            
+            st.download_button(
+                label="📊 Baixar Agenda em Formato Calendário (Excel por Mês)",
+                data=buffer_excel,
+                file_name=f"agenda_atividades_{datetime.now().strftime('%Y_%m')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
+            st.divider()
             col_ed1, col_ed2, col_ed3 = st.columns(3)
             with col_ed1:
                 id_agenda = st.number_input("ID do Item", min_value=1, step=1)
@@ -436,7 +516,7 @@ elif menu == "📅 Agenda de Manutenções":
                 st.success(f"Item #{id_agenda} excluído!")
                 st.rerun()
         else:
-            st.info("Nenhuma manutenção ou cobrança agendada.")
+            st.info("Nenhuma atividade ou manutenção agendada.")
 
 elif menu == "📂 Clientes & Histórico":
     st.header("📂 Clientes & Histórico de Atendimentos")
