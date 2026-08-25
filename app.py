@@ -12,6 +12,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
+# 1. Configuração de página (Deve ser a primeira linha executada pelo Streamlit)
 st.set_page_config(page_title="Eli Sistemas - Gestão, Inspeção Técnica e Chamados", page_icon="⚡", layout="wide")
 
 # --- CONFIGURAÇÃO DE DIRETÓRIOS E BANCO DE DADOS ---
@@ -175,84 +176,161 @@ ITENS_SECOES = {
     ]
 }
 
-# --- AUTENTICAÇÃO E SESSÃO ---
+# --- GERENCIAMENTO DE AUTENTICAÇÃO E SESSÃO (CORRIGIDO) ---
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
+if "user" not in st.session_state:
     st.session_state["user"] = ""
+if "perfil" not in st.session_state:
     st.session_state["perfil"] = ""
+if "cliente_vinculado" not in st.session_state:
     st.session_state["cliente_vinculado"] = ""
 
-if not st.session_state["logged_in"]:
-    st.title("⚡ Eli Sistemas - Gestão & Inspeção Técnica")
-    st.subheader("Acesso ao Sistema")
-    
-    with st.form("form_login"):
-        u_input = st.text_input("Usuário")
-        s_input = st.text_input("Senha", type="password")
-        btn_login = st.form_submit_button("Entrar")
+def verificar_credenciais(u_input, s_input):
+    if u_input in usuarios and usuarios[u_input]["senha"] == s_input:
+        st.session_state["logged_in"] = True
+        st.session_state["user"] = u_input
+        st.session_state["perfil"] = usuarios[u_input].get("perfil", "cliente")
+        st.session_state["cliente_vinculado"] = usuarios[u_input].get("cliente_vinculado", "")
+        return True
+    return False
+
+def tela_login():
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.title("⚡ Eli Sistemas - Gestão & Inspeção")
+        st.subheader("Acesso ao Sistema")
         
-        if btn_login:
-            if u_input in usuarios and usuarios[u_input]["senha"] == s_input:
-                st.session_state["logged_in"] = True
-                st.session_state["user"] = u_input
-                st.session_state["perfil"] = usuarios[u_input].get("perfil", "cliente")
-                st.session_state["cliente_vinculado"] = usuarios[u_input].get("cliente_vinculado", "")
-                st.success("Login efetuado com sucesso!")
-                st.rerun()
-            else:
-                st.error("Usuário ou senha incorretos.")
+        with st.form("form_login_principal"):
+            u_input = st.text_input("Usuário")
+            s_input = st.text_input("Senha", type="password")
+            btn_login = st.form_submit_button("Entrar", type="primary")
+            
+            if btn_login:
+                if verificar_credenciais(u_input, s_input):
+                    st.success("Login efetuado com sucesso!")
+                    st.rerun()
+                else:
+                    st.error("Usuário ou senha incorretos.")
+
+# BLOQUEIO DE TELA SE NÃO ESTIVER AUTENTICADO
+if not st.session_state["logged_in"]:
+    tela_login()
     st.stop()
 
-# --- HELPER DE MANIPULAÇÃO DE RASCUNHO DA VISTORIA ---
-def extrair_dados_vistoria_session():
-    chaves = [
-        "cliente", "cnpj", "endereco", "cidade_uf", "sindico", "zelador", "contato", "email", 
-        "data_visita", "tipo_visita", "resp_tecnico", "acompanhante", "status_geral", 
-        "central_sdai", "tipo_central", "qtd_lacos", "det_fumaca", "acionadores", "avisadores", 
-        "pressurizacao", "tensao_baterias", "parecer", "orientacoes", "fotos_carregadas"
-    ]
-    dados = {k: st.session_state.get(k, "") for k in chaves}
-    for sec_key in ITENS_SECOES:
-        for idx, _ in enumerate(ITENS_SECOES[sec_key]):
-            dados[f"{sec_key}_{idx}_val"] = st.session_state.get(f"{sec_key}_{idx}_val", "")
-            dados[f"{sec_key}_{idx}_obs"] = st.session_state.get(f"{sec_key}_{idx}_obs", "")
-            dados[f"{sec_key}_{idx}_status"] = st.session_state.get(f"{sec_key}_{idx}_status", "CONFORME")
-    return dados
+# --- FUNÇÃO PARA GERAR PDF EM FORMATO DE CALENDÁRIO ---
+def gerar_pdf_calendario(ano=None, mes=None, incluir_tudo=False):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, 
+        pagesize=(A4[1], A4[0]), 
+        rightMargin=15, 
+        leftMargin=15, 
+        topMargin=15, 
+        bottomMargin=15
+    )
+    story = []
+    styles = getSampleStyleSheet()
 
-def carregar_dados_vistoria_session(dados):
-    for k, v in dados.items():
-        st.session_state[k] = v
+    style_titulo = ParagraphStyle('CalTitulo', parent=styles['Heading1'], fontSize=14, leading=16, fontName='Helvetica-Bold', alignment=1)
+    style_dia_num = ParagraphStyle('DiaNum', parent=styles['Normal'], fontSize=9, leading=10, fontName='Helvetica-Bold', textColor=colors.HexColor("#2C3E50"))
+    style_tarefa = ParagraphStyle('TarefaCal', parent=styles['Normal'], fontSize=6.5, leading=7.5, textColor=colors.HexColor("#16A085"))
+    style_cab_dia = ParagraphStyle('CabDia', parent=styles['Normal'], fontSize=9, leading=10, fontName='Helvetica-Bold', alignment=1, textColor=colors.whitesmoke)
 
-def salvar_rascunho_bd(cliente, data_visita, dados):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT id FROM rascunhos WHERE cliente = ? AND data_visita = ?", (cliente, data_visita))
-    row = cursor.fetchone()
-    agora_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    json_str = json.dumps(dados, ensure_ascii=False)
-    if row:
-        cursor.execute("UPDATE rascunhos SET dados_json = ?, atualizado_em = ? WHERE id = ?", (json_str, agora_str, row[0]))
-    else:
-        cursor.execute("INSERT INTO rascunhos (cliente, data_visita, dados_json, atualizado_em) VALUES (?, ?, ?, ?)", (cliente, data_visita, json_str, agora_str))
-    conn.commit()
-    conn.close()
-
-def obter_rascunhos_bd():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, cliente, data_visita, dados_json, atualizado_em FROM rascunhos ORDER BY id DESC")
+    cursor.execute("SELECT task, due_date, status FROM agenda ORDER BY due_date ASC")
     rows = cursor.fetchall()
     conn.close()
-    return rows
 
-def excluir_rascunho_bd(rascunho_id):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM rascunhos WHERE id = ?", (rascunho_id,))
-    conn.commit()
-    conn.close()
+    tarefas_por_dia = {}
+    for task, due_date, status in rows:
+        try:
+            dt = datetime.strptime(due_date, "%Y-%m-%d")
+            if incluir_tudo or (dt.year == ano and dt.month == mes):
+                d = dt.day if not incluir_tudo else f"{dt.day}/{dt.month}/{dt.year}"
+                if d not in tarefas_por_dia:
+                    tarefas_por_dia[d] = []
+                tarefas_por_dia[d].append((task, status, due_date))
+        except:
+            pass
 
-# --- FUNÇÃO PARA GERAR PDF DE VISTORIA ---
+    meses_pt = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    
+    if incluir_tudo:
+        story.append(Paragraph(f"<b>RELATÓRIO COMPLETO DE TAREFAS E HISTÓRICO DA AGENDA</b>", style_titulo))
+    else:
+        story.append(Paragraph(f"<b>AGENDA DE MANUTENÇÕES & ATIVIDADES - {meses_pt[mes].upper()} / {ano}</b>", style_titulo))
+        
+    story.append(Paragraph(f"<font size=8>{empresa_db.get('nome', '')}</font>", ParagraphStyle('Sub', parent=styles['Normal'], alignment=1)))
+    story.append(Spacer(1, 8))
+
+    if not incluir_tudo and ano and mes:
+        dias_semana = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+        tabela_dados = [[Paragraph(f"<b>{d}</b>", style_cab_dia) for d in dias_semana]]
+
+        cal = calendar.Calendar(firstweekday=0)
+        mes_matriz = cal.monthdayscalendar(ano, mes)
+
+        for semana in mes_matriz:
+            linha_semana = []
+            for dia in semana:
+                if dia == 0:
+                    linha_semana.append(Paragraph("", style_dia_num))
+                else:
+                    conteudo = [Paragraph(f"<b>{dia}</b>", style_dia_num)]
+                    if dia in tarefas_por_dia:
+                        for t_desc, t_stat, _ in tarefas_por_dia[dia]:
+                            check = "✔ " if t_stat == "Realizado" else "• "
+                            conteudo.append(Paragraph(f"{check}{t_desc}", style_tarefa))
+                    linha_semana.append(conteudo)
+            tabela_dados.append(linha_semana)
+
+        largura_col = 114
+        t_cal = Table(tabela_dados, colWidths=[largura_col]*7)
+        
+        estilo_tabela = [
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#BDC3C7")),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]
+        
+        for i in range(1, len(tabela_dados)):
+            estilo_tabela.append(('ROWBACKGROUNDS', (0, i), (-1, i), [colors.whitesmoke if i % 2 == 0 else colors.HexColor("#FAFAFA")]))
+
+        t_cal.setStyle(TableStyle(estilo_tabela))
+        story.append(t_cal)
+    else:
+        dados_tabela = [[
+            Paragraph("<b>Data Alvo</b>", style_cab_dia),
+            Paragraph("<b>Descrição da Tarefa</b>", style_cab_dia),
+            Paragraph("<b>Status</b>", style_cab_dia)
+        ]]
+        for task, due_date, status in rows:
+            check = "✔ Realizado" if status == "Realizado" else "⏳ Não realizado"
+            dados_tabela.append([
+                Paragraph(due_date, style_dia_num),
+                Paragraph(task, style_dia_num),
+                Paragraph(check, style_tarefa)
+            ])
+        t_list = Table(dados_tabela, colWidths=[100, 550, 150])
+        t_list.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#BDC3C7")),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(t_list)
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+# --- MÉRITO GERADOR DE PDFS DE VISTORIA (REPORTLAB COM REGISTRO FOTOGRÁFICO) ---
 def gerar_pdf_preventiva():
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -348,4 +426,285 @@ def gerar_pdf_preventiva():
         story.append(Spacer(1, 4))
 
     story.append(Paragraph("<b>7. CONCLUSÃO TÉCNICA E ORIENTAÇÕES OPERACIONAIS</b>", style_sec_header))
-    parecer_texto
+    parecer_texto = f"<b>Parecer Técnico / Conclusão:</b><br/>{st.session_state.get('parecer', 'Nenhuma observação registrada.')}"
+    orientacoes_texto = f"<b>Orientações Operacionais:</b><br/>{st.session_state.get('orientacoes', 'Nenhuma orientação específica.')}"
+    
+    t_conclusao = Table([[Paragraph(parecer_texto, style_celula)], [Paragraph(orientacoes_texto, style_celula)]], colWidths=[555])
+    t_conclusao.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey), ('TOPPADDING', (0,0), (-1,-1), 4), ('BOTTOMPADDING', (0,0), (-1,-1), 4)]))
+    story.append(t_conclusao)
+    story.append(Spacer(1, 6))
+
+    story.append(Paragraph("<b>8. VALIDAÇÃO E ASSINATURAS TÉCNICAS</b>", style_sec_header))
+    assinaturas_data = [[
+        Paragraph(f"<b>Responsável Técnico:</b> {st.session_state.get('resp_tecnico', '')}<br/>CREA: {empresa_db.get('crea', '')}<br/><br/><br/>________________________________________<br/>Assinatura do Técnico", style_celula),
+        Paragraph(f"<b>Responsável / Síndico / Portaria:</b> {st.session_state.get('acompanhante', st.session_state.get('sindico', ''))}<br/><br/><br/><br/>________________________________________<br/>Assinatura do Cliente / Recebedor", style_celula)
+    ]]
+    t_ass = Table(assinaturas_data, colWidths=[277, 278])
+    t_ass.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey), ('TOPPADDING', (0,0), (-1,-1), 6), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
+    story.append(t_ass)
+
+    fotos_relatorio = st.session_state.get("fotos_carregadas", [])
+    fotos_validas = [f for f in fotos_relatorio if os.path.exists(f)]
+    if fotos_validas:
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("<b>9. REGISTRO FOTOGRÁFICO DA INSPEÇÃO</b>", style_sec_header))
+        tabela_fotos_dados = []
+        linha_atual = []
+        for idx_foto, p_foto in enumerate(fotos_validas):
+            try:
+                img_obj = Image(p_foto, width=260, height=180)
+                celula_foto = [img_obj, Paragraph(f"<small>Foto {idx_foto+1}: Registro de Vistoria</small>", style_celula)]
+                linha_atual.append(celula_foto)
+            except:
+                pass
+            if len(linha_atual) == 2:
+                tabela_fotos_dados.append(linha_atual)
+                linha_atual = []
+        if linha_atual:
+            if len(linha_atual) == 1:
+                linha_atual.append("")
+            tabela_fotos_dados.append(linha_atual)
+
+        if tabela_fotos_dados:
+            t_fotos = Table(tabela_fotos_dados, colWidths=[275, 275])
+            t_fotos.setStyle(TableStyle([
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+                ('TOPPADDING', (0,0), (-1,-1), 4)
+            ]))
+            story.append(t_fotos)
+
+    doc.build(story)
+    buffer.seek(0)
+    pdf_data = buffer.getvalue()
+
+    nome_cliente_atual = st.session_state.get('cliente', '').strip()
+    if nome_cliente_atual:
+        nome_pasta_cliente = "".join(c for c in nome_cliente_atual if c.isalnum() or c in (' ', '_', '-')).strip()
+        cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
+        os.makedirs(cliente_dir, exist_ok=True)
+        
+        data_hora_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+        nome_arq_pdf = f"Relatorio_Preventiva_{data_hora_str}.pdf"
+        caminho_completo_pdf = os.path.join(cliente_dir, nome_arq_pdf)
+        
+        with open(caminho_completo_pdf, "wb") as f_pdf:
+            f_pdf.write(pdf_data)
+            
+        registrar_historico_cliente(
+            nome_cliente_atual, 
+            "Relatório de Vistoria Preventiva", 
+            {
+                "arquivo_pdf": nome_arq_pdf,
+                "status_geral": st.session_state.get('status_geral', ''),
+                "resp_tecnico": st.session_state.get('resp_tecnico', '')
+            }
+        )
+
+    return pdf_data
+
+def inicializar_defaults():
+    defaults_vistoria = {
+        "cliente": "", "cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP",
+        "sindico": "", "zelador": "", "contato": "", "email": "",
+        "data_visita": datetime.now().strftime("%Y-%m-%d"), "tipo_visita": "Preventiva Trimestral",
+        "resp_tecnico": empresa_db.get("resp_tecnico", "Eli Silva"), "acompanhante": "",
+        "status_geral": "CONFORME / SISTEMA OPERACIONAL", "central_sdai": "",
+        "tipo_central": "SISTEMA ENDEREÇÁVEL", "qtd_lacos": "", "det_fumaca": "",
+        "acionadores": "", "avisadores": "", "pressurizacao": "Sim",
+        "tensao_baterias": "24 Vcc", "parecer": "", "orientacoes": "", "fotos_carregadas": []
+    }
+    for k, v in defaults_vistoria.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+    for sec_key in ITENS_SECOES:
+        for idx, _ in enumerate(ITENS_SECOES[sec_key]):
+            if f"{sec_key}_{idx}_val" not in st.session_state:
+                st.session_state[f"{sec_key}_{idx}_val"] = ""
+            if f"{sec_key}_{idx}_obs" not in st.session_state:
+                st.session_state[f"{sec_key}_{idx}_obs"] = ""
+            if f"{sec_key}_{idx}_status" not in st.session_state:
+                st.session_state[f"{sec_key}_{idx}_status"] = "CONFORME"
+
+inicializar_defaults()
+
+# --- BARRA LATERAL E LOGOUT ---
+with st.sidebar:
+    st.title("⚡ Eli Sistemas")
+    st.write(f"👤 Usuário: **{st.session_state['user']}** ({st.session_state['perfil'].upper()})")
+    
+    if st.button("🚪 Sair / Logout", type="primary"):
+        st.session_state["logged_in"] = False
+        st.session_state["user"] = ""
+        st.session_state["perfil"] = ""
+        st.session_state["cliente_vinculado"] = ""
+        st.rerun()
+        
+    st.divider()
+
+    # Menu Adaptativo por Perfil
+    if st.session_state["perfil"] == "master":
+        opcoes_menu = [
+            "📋 Nova Vistoria / Laudo", 
+            "📂 Rascunhos de Vistoria", 
+            "📅 Agenda de Manutenções", 
+            "📂 Clientes & Histórico", 
+            "🎫 Chamados Técnicos", 
+            "🏢 Dados da Empresa", 
+            "👥 Gestão de Usuários",
+            "💾 Backup & Restauração"
+        ]
+    else:
+        opcoes_menu = ["🎫 Chamados Técnicos", "📂 Clientes & Histórico"]
+        
+    menu = st.radio("Navegação Principal", opcoes_menu)
+
+# --- NAVEGAÇÃO PRINCIPAL DAS MÓDULOS ---
+if menu == "📋 Nova Vistoria / Laudo":
+    st.header("📋 Emissão de Relatório / Vistoria Preventiva")
+    
+    # Seleção de cliente cadastrado para autopreencher
+    if clientes_db:
+        lista_cli = ["-- Selecionar Cliente Cadastrado --"] + list(clientes_db.keys())
+        cli_sel = st.selectbox("Carregar Dados de Cliente Existente", lista_cli)
+        if cli_sel != "-- Selecionar Cliente Cadastrado --":
+            info_c = clientes_db[cli_sel]
+            st.session_state["cliente"] = cli_sel
+            st.session_state["cnpj"] = info_c.get("cnpj", "")
+            st.session_state["endereco"] = info_c.get("endereco", "")
+            st.session_state["cidade_uf"] = info_c.get("cidade_uf", "Ribeirão Preto - SP")
+            st.session_state["sindico"] = info_c.get("sindico", "")
+            st.session_state["zelador"] = info_c.get("zelador", "")
+            st.session_state["contato"] = info_c.get("telefone", "")
+            st.session_state["email"] = info_c.get("email", "")
+
+    st.subheader("1. Dados Gerais da Edificação")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.session_state["cliente"] = st.text_input("Cliente / Condomínio", value=st.session_state["cliente"])
+        st.session_state["cnpj"] = st.text_input("CNPJ", value=st.session_state["cnpj"])
+        st.session_state["endereco"] = st.text_input("Endereço", value=st.session_state["endereco"])
+        st.session_state["cidade_uf"] = st.text_input("Cidade / UF", value=st.session_state["cidade_uf"])
+        st.session_state["sindico"] = st.text_input("Síndico", value=st.session_state["sindico"])
+    with col2:
+        st.session_state["data_visita"] = st.text_input("Data da Visita", value=st.session_state["data_visita"])
+        st.session_state["tipo_visita"] = st.text_input("Tipo de Visita", value=st.session_state["tipo_visita"])
+        st.session_state["resp_tecnico"] = st.text_input("Responsável Técnico", value=st.session_state["resp_tecnico"])
+        st.session_state["zelador"] = st.text_input("Zelador", value=st.session_state["zelador"])
+        st.session_state["contato"] = st.text_input("Contato / Tel", value=st.session_state["contato"])
+
+    st.subheader("2. Características Técnicas do Sistema")
+    col_t1, col_t2, col_t3 = st.columns(3)
+    with col_t1:
+        st.session_state["central_sdai"] = st.text_input("Central SDAI (Marca/Modelo)", value=st.session_state["central_sdai"])
+        st.session_state["det_fumaca"] = st.text_input("Detectores Fumaça/Térmicos", value=st.session_state["det_fumaca"])
+    with col_t2:
+        st.session_state["tipo_central"] = st.text_input("Tipo de Central", value=st.session_state["tipo_central"])
+        st.session_state["acionadores"] = st.text_input("Acionadores Manuais", value=st.session_state["acionadores"])
+    with col_t3:
+        st.session_state["qtd_lacos"] = st.text_input("Qtd. Laços / Zonas", value=st.session_state["qtd_lacos"])
+        st.session_state["avisadores"] = st.text_input("Avisadores Sonoros/Visuais", value=st.session_state["avisadores"])
+
+    st.subheader("3. Checklist & Vistorias por Seção")
+    for sec_key, sec_title in {
+        "sec3": "3. Verificação Física e Elétrica da Central e Fontes",
+        "sec4": "4. Integridade das Linhas de Sinal (Laços)",
+        "sec5": "5. Ensaios Funcionais & Amostragem de Periféricos",
+        "sec6": "6. Pressurização de Escadas de Segurança & Interligações (IT 13)"
+    }.items():
+        with st.expander(sec_title, expanded=True):
+            for idx, item in enumerate(ITENS_SECOES[sec_key]):
+                c_item, c_val, c_stat, c_obs = st.columns([3, 1, 1, 2])
+                with c_item:
+                    st.write(f"**{item[0]}**")
+                    st.caption(item[1])
+                with c_val:
+                    st.session_state[f"{sec_key}_{idx}_val"] = st.text_input("Medição", value=st.session_state[f"{sec_key}_{idx}_val"], key=f"inp_v_{sec_key}_{idx}")
+                with c_stat:
+                    st.session_state[f"{sec_key}_{idx}_status"] = st.selectbox("Status", ["CONFORME", "NÃO CONFORME", "N/A"], index=["CONFORME", "NÃO CONFORME", "N/A"].index(st.session_state[f"{sec_key}_{idx}_status"]), key=f"inp_s_{sec_key}_{idx}")
+                with c_obs:
+                    st.session_state[f"{sec_key}_{idx}_obs"] = st.text_input("Observações", value=st.session_state[f"{sec_key}_{idx}_obs"], key=f"inp_o_{sec_key}_{idx}")
+
+    st.subheader("4. Conclusão & Fotos")
+    st.session_state["parecer"] = st.text_area("Parecer Técnico / Conclusão", value=st.session_state["parecer"])
+    st.session_state["orientacoes"] = st.text_area("Orientações Operacionais", value=st.session_state["orientacoes"])
+
+    uploaded_images = st.file_uploader("Anexar Fotos da Vistoria", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+    if uploaded_images:
+        paths = []
+        for img in uploaded_images:
+            p = os.path.join(PASTA_FOTOS_VISTORIA, img.name)
+            with open(p, "wb") as f:
+                f.write(img.getbuffer())
+            paths.append(p)
+        st.session_state["fotos_carregadas"] = paths
+        st.success(f"{len(paths)} foto(s) anexada(s) com sucesso!")
+
+    st.divider()
+    col_pdf, col_rascunho = st.columns(2)
+    with col_pdf:
+        if st.button("📄 Gerar e Salvar PDF do Relatório", type="primary"):
+            pdf_bytes = gerar_pdf_preventiva()
+            st.success("Relatório PDF gerado e arquivado!")
+            st.download_button("💾 Baixar Relatório PDF", pdf_bytes, file_name=f"Vistoria_{st.session_state['cliente']}.pdf", mime="application/pdf")
+
+elif menu == "📅 Agenda de Manutenções":
+    st.header("📅 Agenda & Controle de Manutenções")
+    
+    col_ag1, col_ag2 = st.columns([1, 2])
+    with col_ag1:
+        st.subheader("Nova Tarefa / Agendamento")
+        with st.form("form_agenda"):
+            nova_tarefa = st.text_input("Descrição da Tarefa")
+            categoria = st.selectbox("Categoria", ["Preventiva", "Corretiva", "Vistoria", "Atendimento"])
+            data_alvo = st.date_input("Data Alvo")
+            status_t = st.selectbox("Status Inicial", ["Pendente", "Realizado"])
+            
+            if st.form_submit_button("Agendar"):
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                c.execute("INSERT INTO agenda (task, category, due_date, status) VALUES (?, ?, ?, ?)", (nova_tarefa, categoria, str(data_alvo), status_t))
+                conn.commit()
+                conn.close()
+                st.success("Agendamento gravado!")
+                st.rerun()
+
+    with col_ag2:
+        st.subheader("Próximas Atividades")
+        conn = sqlite3.connect(DB_FILE)
+        df_agenda = pd.read_sql_query("SELECT id, task AS Tarefa, category AS Categoria, due_date AS Data, status AS Status FROM agenda ORDER BY due_date ASC", conn)
+        conn.close()
+        st.dataframe(df_agenda, use_container_width=True)
+        
+        if st.button("📄 Exportar PDF do Calendário"):
+            hoje = datetime.now()
+            pdf_cal = gerar_pdf_calendario(ano=hoje.year, mes=hoje.month)
+            st.download_button("💾 Baixar PDF do Mês", pdf_cal, file_name=f"Agenda_{hoje.month}_{hoje.year}.pdf", mime="application/pdf")
+
+elif menu == "💾 Backup & Restauração":
+    st.header("💾 Central de Backup e Restauração de Dados")
+    
+    tab_b1, tab_b2 = st.tabs(["⬇️ Fazer Backup", "⬆️ Restaurar / Upload de Backup"])
+    
+    with tab_b1:
+        st.subheader("Exportar Banco de Dados Atual")
+        st.write("Baixe o arquivo de banco de dados (`.db`) para manter uma cópia de segurança de toda a sua agenda e relatórios.")
+        if st.button("📦 Executar Backup Agora"):
+            b_path = perform_backup()
+            if b_path:
+                st.success(f"Backup criado com sucesso em: `{b_path}`")
+                with open(b_path, "rb") as f:
+                    st.download_button("💾 Baixar Arquivo de Banco (.db)", f, file_name=os.path.basename(b_path))
+                    
+    with tab_b2:
+        st.subheader("Importar e Restaurar Banco de Dados")
+        st.warning("⚠️ Atenção: Fazer o upload de um arquivo de backup substituirá o banco de dados atual.")
+        uploaded_db = st.file_uploader("Selecione o arquivo de banco de dados (.db)", type=["db"])
+        
+        if uploaded_db is not None:
+            if st.button("🔄 Restaurar Dados deste Arquivo"):
+                if restaurar_backup(uploaded_db):
+                    st.success("✅ Banco de dados restaurado com sucesso!")
+                    st.rerun()
