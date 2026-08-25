@@ -315,7 +315,7 @@ def gerar_pdf_calendario(ano=None, mes=None, incluir_tudo=False):
     buffer.seek(0)
     return buffer.getvalue()
 
-# --- MÉRITO GERADOR DE PDFS DE VISTORIA (REPORTLAB) ---
+# --- MÉRITO GERADOR DE PDFS DE VISTORIA (REPORTLAB COM REGISTRO FOTOGRÁFICO) ---
 def gerar_pdf_preventiva():
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -428,6 +428,44 @@ def gerar_pdf_preventiva():
     t_ass.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey), ('TOPPADDING', (0,0), (-1,-1), 6), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
     story.append(t_ass)
 
+    # --- NOVO: INCLUSÃO DAS FOTOS ANEXADAS NO PDF ---
+    fotos_relatorio = st.session_state.get("fotos_carregadas", [])
+    fotos_validas = [f for f in fotos_relatorio if os.path.exists(f)]
+
+    if fotos_validas:
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("<b>9. REGISTRO FOTOGRÁFICO DA INSPEÇÃO</b>", style_sec_header))
+        
+        tabela_fotos_dados = []
+        linha_atual = []
+        
+        for idx_foto, p_foto in enumerate(fotos_validas):
+            try:
+                img_obj = Image(p_foto, width=260, height=180)
+                celula_foto = [img_obj, Paragraph(f"<small>Foto {idx_foto+1}: Registro de Vistoria</small>", style_celula)]
+                linha_atual.append(celula_foto)
+            except:
+                pass
+                
+            if len(linha_atual) == 2:
+                tabela_fotos_dados.append(linha_atual)
+                linha_atual = []
+                
+        if linha_atual:
+            if len(linha_atual) == 1:
+                linha_atual.append("")
+            tabela_fotos_dados.append(linha_atual)
+
+        if tabela_fotos_dados:
+            t_fotos = Table(tabela_fotos_dados, colWidths=[275, 275])
+            t_fotos.setStyle(TableStyle([
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+                ('TOPPADDING', (0,0), (-1,-1), 4)
+            ]))
+            story.append(t_fotos)
+
     doc.build(story)
     buffer.seek(0)
     pdf_data = buffer.getvalue()
@@ -490,7 +528,7 @@ def extrair_dados_vistoria_session():
         "cliente", "cnpj", "endereco", "cidade_uf", "sindico", "zelador", "contato",
         "email", "data_visita", "tipo_visita", "resp_tecnico", "acompanhante",
         "status_geral", "central_sdai", "tipo_central", "qtd_lacos", "det_fumaca",
-        "acionadores", "avisadores", "pressurizacao", "tensao_baterias", "parecer", "orientacoes"
+        "acionadores", "avisadores", "pressurizacao", "tensao_baterias", "parecer", "orientacoes", "fotos_carregadas"
     ]
     dados = {k: st.session_state.get(k, "") for k in chaves}
     for sec_key in ITENS_SECOES:
@@ -722,55 +760,99 @@ elif menu == "📅 Agenda Principal":
 elif menu == "📋 Vistoria & Relatório Técnico NBR 17240":
     st.header("📋 Inspeção Preventiva & Relatório NBR 17240")
     
-    # --- GERENCIAMENTO DE RASCUNHOS SALVOS ---
+    # --- GERENCIAMENTO E BUSCA DE RASCUNHOS SALVOS ---
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("SELECT id, cliente, data_visita, atualizado_em, dados_json FROM rascunhos ORDER BY atualizado_em DESC")
     lista_rascunhos = cursor.fetchall()
     conn.close()
 
-    opcoes_rascunho = ["-- Novo Relatório --"] + [f"ID #{r[0]} | {r[1]} | Data Visita: {r[2]} (Salvo: {r[3]})" for r in lista_rascunhos]
-    rascunho_sel = st.selectbox("📝 Continuar a partir de um rascunho salvo:", opcoes_rascunho)
-
-    if rascunho_sel != "-- Novo Relatório --":
-        id_rascunho = int(rascunho_sel.split("#")[1].split(" ")[0])
-        for r in lista_rascunhos:
-            if r[0] == id_rascunho:
-                dados_r = json.loads(r[4])
-                if st.button("🔄 Carregar este Rascunho"):
-                    carregar_dados_vistoria_session(dados_r)
-                    st.success("Dados do rascunho carregados com sucesso!")
-                    st.rerun()
-                break
+    dict_rascunhos = {r[1]: r for r in lista_rascunhos} # Mapeia cliente -> rascunho mais recente
+    
+    with st.expander("📝 Gerenciar e Buscar Rascunhos Salvos", expanded=bool(lista_rascunhos)):
+        if not lista_rascunhos:
+            st.info("Nenhum rascunho pendente no momento.")
+        else:
+            filtro_rascunho = st.text_input("🔍 Buscar rascunho por nome do cliente ou data:", placeholder="Digite para filtrar...")
+            
+            rascunhos_filtrados = [
+                r for r in lista_rascunhos 
+                if filtro_rascunho.lower() in r[1].lower() or filtro_rascunho.lower() in r[2].lower()
+            ]
+            
+            if not rascunhos_filtrados:
+                st.warning("Nenhum rascunho encontrado com o termo digitado.")
+            else:
+                for r in rascunhos_filtrados:
+                    r_id, r_cliente, r_data, r_atualizado, r_json = r
+                    col_r1, col_r2, col_r3 = st.columns([3, 1, 1])
+                    
+                    with col_r1:
+                        st.markdown(f"**🏢 {r_cliente}** — Visita: `{r_data}` <br/><small>Última alteração: {r_atualizado}</small>", unsafe_allow_html=True)
+                    with col_r2:
+                        if st.button("🔄 Carregar", key=f"btn_load_rasc_{r_id}", use_container_width=True):
+                            dados_r = json.loads(r_json)
+                            carregar_dados_vistoria_session(dados_r)
+                            st.success(f"Rascunho de '{r_cliente}' carregado!")
+                            st.rerun()
+                    with col_r3:
+                        if st.button("🗑️ Excluir", key=f"btn_del_rasc_{r_id}", use_container_width=True):
+                            excluir_rascunho_bd(r_cliente, r_data)
+                            st.warning(f"Rascunho de '{r_cliente}' excluído!")
+                            st.rerun()
 
     st.divider()
 
-    # Seleção rápida por cliente cadastrado
+    # --- SELEÇÃO DE CLIENTE COM INDICAÇÃO DE RASCUNHO PENDENTE ---
     clientes_ativos = {k: v for k, v in clientes_db.items() if isinstance(v, dict) and v.get("status", "Ativo") == "Ativo"}
+    
     if clientes_ativos:
-        lista_clientes_nomes = ["-- Selecione --"] + list(clientes_ativos.keys())
-        def ao_selecionar_cliente():
-            cli_nome = st.session_state["select_carregar_cliente"]
-            if cli_nome != "-- Selecione --" and cli_nome in clientes_ativos:
-                c_info = clientes_ativos[cli_nome]
-                st.session_state["cliente"] = c_info.get("nome", "")
-                st.session_state["cnpj"] = c_info.get("cnpj", "")
-                st.session_state["endereco"] = c_info.get("endereco", "")
-                st.session_state["cidade_uf"] = c_info.get("cidade_uf", "")
-                st.session_state["sindico"] = c_info.get("sindico", "")
-                st.session_state["zelador"] = c_info.get("zelador", "")
-                st.session_state["contato"] = c_info.get("contato", "")
-                st.session_state["email"] = c_info.get("email", "")
-                st.session_state["central_sdai"] = c_info.get("central_sdai", "")
-                st.session_state["tipo_central"] = c_info.get("tipo_central", "")
-                st.session_state["qtd_lacos"] = c_info.get("qtd_lacos", "")
-                st.session_state["det_fumaca"] = c_info.get("det_fumaca", "")
-                st.session_state["acionadores"] = c_info.get("acionadores", "")
-                st.session_state["avisadores"] = c_info.get("avisadores", "")
-                st.session_state["pressurizacao"] = c_info.get("pressurizacao", "")
-                st.session_state["tensao_baterias"] = c_info.get("tensao_baterias", "")
+        opcoes_dropdown = ["-- Selecione o Cliente --"]
+        mapa_nomes = {}
+        
+        for nome_cli in clientes_ativos.keys():
+            label = f"{nome_cli} 📝 (Rascunho Pendente)" if nome_cli in dict_rascunhos else nome_cli
+            opcoes_dropdown.append(label)
+            mapa_nomes[label] = nome_cli
 
-        st.selectbox("Selecione um Cliente Ativo para Preenchimento Automático", lista_clientes_nomes, key="select_carregar_cliente", on_change=ao_selecionar_cliente)
+        def ao_selecionar_cliente():
+            label_sel = st.session_state["select_carregar_cliente"]
+            if label_sel != "-- Selecione o Cliente --":
+                cli_nome = mapa_nomes[label_sel]
+                
+                if cli_nome in dict_rascunhos:
+                    r_dados = json.loads(dict_rascunhos[cli_nome][4])
+                    carregar_dados_vistoria_session(r_dados)
+                    st.toast(f"📝 Rascunho do cliente '{cli_nome}' recarregado automaticamente!", icon="✅")
+                else:
+                    c_info = clientes_ativos[cli_nome]
+                    st.session_state["cliente"] = c_info.get("nome", "")
+                    st.session_state["cnpj"] = c_info.get("cnpj", "")
+                    st.session_state["endereco"] = c_info.get("endereco", "")
+                    st.session_state["cidade_uf"] = c_info.get("cidade_uf", "")
+                    st.session_state["sindico"] = c_info.get("sindico", "")
+                    st.session_state["zelador"] = c_info.get("zelador", "")
+                    st.session_state["contato"] = c_info.get("contato", "")
+                    st.session_state["email"] = c_info.get("email", "")
+                    st.session_state["central_sdai"] = c_info.get("central_sdai", "")
+                    st.session_state["tipo_central"] = c_info.get("tipo_central", "")
+                    st.session_state["qtd_lacos"] = c_info.get("qtd_lacos", "")
+                    st.session_state["det_fumaca"] = c_info.get("det_fumaca", "")
+                    st.session_state["acionadores"] = c_info.get("acionadores", "")
+                    st.session_state["avisadores"] = c_info.get("avisadores", "")
+                    st.session_state["pressurizacao"] = c_info.get("pressurizacao", "")
+                    st.session_state["tensao_baterias"] = c_info.get("tensao_baterias", "")
+
+        st.selectbox(
+            "Selecione um Cliente Ativo para Preenchimento ou Continuação",
+            opcoes_dropdown,
+            key="select_carregar_cliente",
+            on_change=ao_selecionar_cliente
+        )
+
+    cliente_atual = st.session_state.get("cliente", "").strip()
+    if cliente_atual in dict_rascunhos:
+        st.info(f"💡 **Atenção:** Existe um rascunho em aberto para **{cliente_atual}** (Última atualização: {dict_rascunhos[cliente_atual][3]}). Os dados abaixo referem-se a esta edição em andamento.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -799,6 +881,41 @@ elif menu == "📋 Vistoria & Relatório Técnico NBR 17240":
     st.text_area("Parecer Técnico / Conclusão", key="parecer")
     st.text_area("Orientações Operacionais", key="orientacoes")
 
+    # --- NOVO: SEÇÃO PARA ANEXAR E EXIBIR FOTOS DA VISTORIA ---
+    st.subheader("📷 Registro Fotográfico da Vistoria")
+    novas_fotos = st.file_uploader(
+        "Anexar imagens/fotos para o relatório (PDF)", 
+        type=["png", "jpg", "jpeg"], 
+        accept_multiple_files=True
+    )
+    
+    if novas_fotos:
+        for f_upload in novas_fotos:
+            time_stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            nome_arq_foto = f"vistoria_{time_stamp}_{f_upload.name}"
+            caminho_salvar = os.path.join(PASTA_FOTOS_VISTORIA, nome_arq_foto)
+            
+            with open(caminho_salvar, "wb") as f_out:
+                f_out.write(f_upload.getbuffer())
+                
+            if caminho_salvar not in st.session_state["fotos_carregadas"]:
+                st.session_state["fotos_carregadas"].append(caminho_salvar)
+        st.toast("✅ Foto(s) adicionada(s) com sucesso!", icon="📷")
+
+    fotos_atuais = st.session_state.get("fotos_carregadas", [])
+    if fotos_atuais:
+        st.markdown(f"**Fotos Anexadas ({len(fotos_atuais)}):**")
+        cols_foto = st.columns(4)
+        for idx, path_f in enumerate(fotos_atuais):
+            if os.path.exists(path_f):
+                with cols_foto[idx % 4]:
+                    st.image(path_f, use_container_width=True)
+                    if st.button("🗑️ Remover", key=f"btn_del_foto_{idx}"):
+                        st.session_state["fotos_carregadas"].pop(idx)
+                        st.rerun()
+
+    st.divider()
+
     col_btn_rascunho, col_btn_finalizar = st.columns(2)
 
     with col_btn_rascunho:
@@ -810,7 +927,8 @@ elif menu == "📋 Vistoria & Relatório Técnico NBR 17240":
             else:
                 dados_v = extrair_dados_vistoria_session()
                 salvar_rascunho_bd(c_nome, d_visita, dados_v)
-                st.success("✅ Rascunho salvo com sucesso! Você pode continuar a edição a qualquer momento.")
+                st.success("✅ Rascunho salvo com sucesso!")
+                st.rerun()
 
     with col_btn_finalizar:
         if st.button("💾 Finalizar e Gerar PDF", type="primary", use_container_width=True):
@@ -821,7 +939,7 @@ elif menu == "📋 Vistoria & Relatório Técnico NBR 17240":
             else:
                 pdf_bytes = gerar_pdf_preventiva()
                 excluir_rascunho_bd(c_nome, d_visita)
-                st.success("✅ Relatório finalizado e disponibilizado na Pasta Digital do cliente!")
+                st.success("✅ Relatório finalizado e salvo na Pasta Digital!")
                 st.download_button("📄 BAIXAR RELATÓRIO PDF", data=pdf_bytes, file_name=f"Relatorio_{c_nome}.pdf", mime="application/pdf")
 
 elif menu == "🏢 Cadastro de Clientes & SDAI":
