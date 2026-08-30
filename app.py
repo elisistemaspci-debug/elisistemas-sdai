@@ -6,6 +6,9 @@ import shutil
 import hashlib
 import calendar
 import zipfile
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 import streamlit as st
 import pandas as pd
@@ -111,7 +114,7 @@ def restaurar_backup_completo(uploaded_file):
     return False
 
 # ==============================================================================
-# 3. GESTÃO DE PERSISTÊNCIA JSON E HISTÓRICO
+# 3. GESTÃO DE PERSISTÊNCIA JSON, HISTÓRICO E NOTIFICAÇÃO DE E-MAIL
 # ==============================================================================
 @st.cache_data
 def carregar_json_cached(path):
@@ -131,6 +134,45 @@ def salvar_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
     carregar_json_cached.clear()
+
+def enviar_email_novo_chamado(cliente, usuario, titulo, descricao, data_chamado):
+    """Atribuição: Enviar notificação por e-mail para elisistemaspci@gmail.com quando um chamado for aberto."""
+    remetente = "elisistemaspci@gmail.com"
+    senha_app = "SUA_SENHA_DE_APLICATIVO_DO_GMAIL"  # Configure aqui a Senha de Aplicativo do Gmail
+    destinatario = "elisistemaspci@gmail.com"
+
+    assunto = f"⚡ Novo Chamado Técnico Registrado - {cliente}"
+    corpo = f"""
+    Um novo chamado técnico foi aberto no sistema Eli Sistemas:
+
+    - Cliente / Condomínio: {cliente}
+    - Usuário Responsável: {usuario}
+    - Título: {titulo}
+    - Data/Hora: {data_chamado}
+    
+    Descrição do Problema:
+    {descricao}
+
+    ---
+    E-mail automático gerado pelo sistema Eli Sistemas.
+    """
+
+    msg = MIMEMultipart()
+    msg["From"] = remetente
+    msg["To"] = destinatario
+    msg["Subject"] = assunto
+    msg.attach(MIMEText(corpo, "plain", "utf-8"))
+
+    try:
+        servidor = smtplib.SMTP("smtp.gmail.com", 587)
+        servidor.starttls()
+        servidor.login(remetente, senha_app)
+        servidor.sendmail(remetente, destinatario, msg.as_string())
+        servidor.quit()
+        return True
+    except Exception as e:
+        print(f"Erro ao enviar e-mail: {e}")
+        return False
 
 def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict):
     """Atribuição: Gravar log contínuo de atendimentos na pasta individual do cliente."""
@@ -730,7 +772,7 @@ elif menu == "📂 Rascunhos de Vistoria":
 
 elif menu == "📊 Controle de Vencimentos":
     st.header("📊 Controle de Vencimentos & Oportunidades de Orçamento")
-    st.info("💡 **Aviso Automático de 30 Dias:** As células ganham destaque em amarelo quando estiverem a 1 mês do vencimento (ideal para ligar e ofertar orçamento) e em vermelho caso já estejam vencidas.")
+    st.info("💡 **Aviso Automático de 30 Dias:** As células ganham destaque em amarelo quando estiverem a 1 mês do vencimento (ideal para ligar e ofertar orçamento) e enegrecidas/vermelhas caso já estejam vencidas.")
 
     total_vencidos = 0
     total_alerta = 0
@@ -958,7 +1000,6 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
     with tab_c2:
         st.subheader("Cadastrar ou Editar Cliente")
         
-        # Seleção de modo: Novo Cliente vs Editar Cliente Existente
         modo_cliente = st.radio("Selecione a Ação", ["Novo Cliente", "Editar Cliente Existente"], horizontal=True)
         
         cli_edit_sel = None
@@ -974,7 +1015,7 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                 nome_cli = st.text_input("Nome do Cliente / Condomínio")
             else:
                 st.text(f"Editando Cliente: {cli_edit_sel}")
-                nome_cli = cli_edit_sel  # Mantém o nome fixo ou chave primária
+                nome_cli = cli_edit_sel
                 
             cnpj_cli = st.text_input("CNPJ", value=dados_cli_atual.get("cnpj", ""))
             end_cli = st.text_input("Endereço", value=dados_cli_atual.get("endereco", ""))
@@ -987,7 +1028,6 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
             if st.form_submit_button("💾 Salvar / Atualizar Cliente"):
                 if nome_cli:
                     nome_formatado = nome_cli.strip().upper()
-                    # Se for alteração e o nome mudou ou se for novo
                     clientes_db[nome_formatado] = {
                         "cnpj": cnpj_cli,
                         "endereco": end_cli,
@@ -1103,16 +1143,32 @@ elif menu == "🎫 Chamados Técnicos":
         
         if st.form_submit_button("📩 ABRIR CHAMADO", type="primary"):
             if titulo_ch and desc_ch:
-                chamados_db.append({
+                data_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                novo_chamado = {
                     "usuario": st.session_state["user"],
                     "cliente": cli_chamado,
                     "titulo": titulo_ch,
                     "descricao": desc_ch,
-                    "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "data": data_atual,
                     "status": "Aberto"
-                })
+                }
+                chamados_db.append(novo_chamado)
                 salvar_json(CHAMADOS_FILE, chamados_db)
-                st.success("Chamado registrado com sucesso!")
+                
+                # Disparo do e-mail de notificação para elisistemaspci@gmail.com
+                email_enviado = enviar_email_novo_chamado(
+                    cli_chamado, 
+                    st.session_state["user"], 
+                    titulo_ch, 
+                    desc_ch, 
+                    data_atual
+                )
+                
+                if email_enviado:
+                    st.success("Chamado registrado e e-mail de notificação enviado com sucesso para elisistemaspci@gmail.com!")
+                else:
+                    st.warning("Chamado registrado no sistema, mas houve uma falha ao enviar o e-mail de alerta.")
+                
                 st.rerun()
             else:
                 st.error("Preencha o título e a descrição.")
