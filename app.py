@@ -132,8 +132,8 @@ def salvar_json(path, data):
         json.dump(data, f, ensure_ascii=False, indent=4)
     carregar_json_cached.clear()
 
-def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict):
-    """Atribuição: Gravar log contínuo de atendimentos na pasta individual do cliente."""
+def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict, pdf_bytes=None):
+    """Atribuição: Gravar log contínuo de atendimentos e salvar PDF vinculado na pasta individual do cliente."""
     if not nome_cliente:
         return
     nome_pasta_cliente = "".join(c for c in nome_cliente.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
@@ -141,8 +141,18 @@ def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict):
         return
         
     cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
-    os.makedirs(cliente_dir, exist_ok=True)
+    pdf_dir = os.path.join(cliente_dir, "pdfs")
+    os.makedirs(pdf_dir, exist_ok=True)
     
+    caminho_pdf_relativo = ""
+    if pdf_bytes:
+        timestamp_file = datetime.now().strftime('%Y%m%d_%H%M%S')
+        nome_pdf_arq = f"Vistoria_{timestamp_file}.pdf"
+        caminho_pdf_completo = os.path.join(pdf_dir, nome_pdf_arq)
+        with open(caminho_pdf_completo, "wb") as f_pdf:
+            f_pdf.write(pdf_bytes)
+        caminho_pdf_relativo = caminho_pdf_completo
+
     historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
     historico_lista = []
     if os.path.exists(historico_path):
@@ -154,6 +164,8 @@ def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict):
             
     detalhes_dict["data"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     detalhes_dict["tipo"] = tipo_acao
+    detalhes_dict["pdf_path"] = caminho_pdf_relativo
+    
     historico_lista.append(detalhes_dict)
     
     with open(historico_path, "w", encoding="utf-8") as f_hist:
@@ -473,10 +485,16 @@ def gerar_pdf_preventiva():
 
     nome_cliente_atual = st.session_state.get('cliente', '').strip()
     if nome_cliente_atual:
-        registrar_historico_cliente(nome_cliente_atual, f"Relatório de Vistoria ({st.session_state.get('tipo_visita', 'Preventiva Trimestral')})", {
-            "status_geral": st.session_state.get('status_geral', 'CONFORME'),
-            "resp_tecnico": st.session_state.get('resp_tecnico', empresa_db.get("resp_tecnico", "Eli Silva"))
-        })
+        registrar_historico_cliente(
+            nome_cliente_atual, 
+            f"Relatório de Vistoria ({st.session_state.get('tipo_visita', 'Preventiva Trimestral')})", 
+            {
+                "status_geral": st.session_state.get('status_geral', 'CONFORME'),
+                "resp_tecnico": st.session_state.get('resp_tecnico', empresa_db.get("resp_tecnico", "Eli Silva")),
+                "parecer": st.session_state.get('parecer', '')
+            },
+            pdf_bytes=pdf_data
+        )
 
     return pdf_data
 
@@ -764,7 +782,7 @@ elif menu == "📋 Nova Vistoria / Laudo":
     with col_btn2:
         if st.button("📄 Gerar e Salvar PDF do Relatório", type="primary"):
             pdf_bytes = gerar_pdf_preventiva()
-            st.success("Relatório gerado com fotos e campo de assinaturas!")
+            st.success("Relatório gerado com fotos, salvo no histórico e pronto para download!")
             st.download_button("💾 Baixar Relatório PDF Completo", pdf_bytes, file_name=f"Vistoria_{st.session_state['cliente']}.pdf", mime="application/pdf")
 
 elif menu == "📂 Rascunhos de Vistoria":
@@ -807,7 +825,7 @@ elif menu == "📂 Rascunhos de Vistoria":
 
 elif menu == "📊 Controle de Vencimentos":
     st.header("📊 Controle de Vencimentos & Oportunidades de Orçamento")
-    st.info("💡 **Aviso Automático de 30 Days:** As células ganham destaque em amarelo quando estiverem a 1 mês do vencimento (ideal para ligar e ofertar orçamento) e em vermelho caso já estejam vencidas.")
+    st.info("💡 **Aviso Automático de 30 Dias:** As células ganham destaque em amarelo quando estiverem a 1 mês do vencimento (ideal para ligar e ofertar orçamento) e em vermelho caso já estejam vencidas.")
 
     total_vencidos = 0
     total_alerta = 0
@@ -1092,12 +1110,37 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                 cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
                 historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
                 
-                st.subheader("📜 Histórico de Atendimentos & Documentos")
+                st.subheader("📜 Histórico de Atendimentos, Chamados & Laudos")
                 if os.path.exists(historico_path):
-                    with open(historico_path, "r", encoding="utf-8") as f_h:
-                        hist_data = json.load(f_h)
-                    df_hist = pd.DataFrame(hist_data)
-                    st.dataframe(df_hist, use_container_width=True)
+                    try:
+                        with open(historico_path, "r", encoding="utf-8") as f_h:
+                            hist_data = json.load(f_h)
+                    except Exception:
+                        hist_data = []
+
+                    if hist_data:
+                        for idx_h, h_item in enumerate(reversed(hist_data)):
+                            tipo_at = h_item.get("tipo", "Atendimento")
+                            data_at = h_item.get("data", "")
+                            status_at = h_item.get("status_geral", h_item.get("status", "Registrado"))
+                            obs_at = h_item.get("parecer", h_item.get("descricao", ""))
+                            pdf_p = h_item.get("pdf_path", "")
+
+                            with st.expander(f"📌 [{data_at}] {tipo_at} — Status: {status_at}"):
+                                st.write(f"**Detalhes / Parecer:** {obs_at}")
+                                st.write(f"**Responsável Técnico / Usuário:** {h_item.get('resp_tecnico', h_item.get('usuario', 'Sistema'))}")
+                                
+                                if pdf_p and os.path.exists(pdf_p):
+                                    with open(pdf_p, "rb") as pdf_file_down:
+                                        st.download_button(
+                                            label="📥 Baixar / Visualizar PDF da Vistoria",
+                                            data=pdf_file_down.read(),
+                                            file_name=os.path.basename(pdf_p),
+                                            mime="application/pdf",
+                                            key=f"down_hist_pdf_{idx_h}_{cli_selecionado}"
+                                        )
+                    else:
+                        st.info("Nenhum registro no histórico deste cliente.")
                 else:
                     st.info("Nenhum histórico gravado para este cliente até o momento.")
         else:
@@ -1174,7 +1217,19 @@ elif menu == "🎫 Chamados Técnicos":
                     }
                     chamados_db.append(novo_registro)
                     salvar_json(CHAMADOS_FILE, chamados_db)
-                    st.success("Chamado aberto com sucesso!")
+                    
+                    # Registra automaticamente no histórico do cliente também
+                    registrar_historico_cliente(
+                        cliente_chamado,
+                        f"Chamado Técnico: {titulo_chamado}",
+                        {
+                            "status": "Aberto",
+                            "descricao": desc_chamado,
+                            "usuario": st.session_state["user"]
+                        }
+                    )
+                    
+                    st.success("Chamado aberto e registrado no histórico do cliente com sucesso!")
                     st.rerun()
                 else:
                     st.warning("Preencha ao menos o Cliente e o Título.")
