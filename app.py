@@ -5,6 +5,7 @@ import sqlite3
 import shutil
 import hashlib
 import calendar
+import zipfile
 from datetime import datetime
 import streamlit as st
 import pandas as pd
@@ -39,13 +40,13 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS reports (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT, client TEXT, date TEXT, content TEXT, type TEXT
+            title TEXT, client TEXT, date TEXT, content TEXT, type TEXT, ativo INTEGER DEFAULT 1
         )
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS agenda (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task TEXT, category TEXT, due_date TEXT, status TEXT
+            task TEXT, category TEXT, due_date TEXT, status TEXT, ativo INTEGER DEFAULT 1
         )
     ''')
     cursor.execute('''
@@ -59,21 +60,51 @@ def init_db():
 
 init_db()
 
-def perform_backup():
+# --- SISTEMA DE BACKUP COMPLETO (100% DOS DADOS, ARQUIVOS, FOTOS E HISTÓRICOS) ---
+def perform_backup_completo():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = os.path.join(BACKUP_DIR, f"backup_{timestamp}.db")
-    if os.path.exists(DB_FILE):
-        shutil.copyfile(DB_FILE, backup_path)
-        with open(backup_path, "rb") as f:
-            return f.read(), f"backup_{timestamp}.db"
-    return None, None
+    zip_filename = f"backup_completo_elisistemas_{timestamp}.zip"
+    zip_path = os.path.join(BACKUP_DIR, zip_filename)
+    
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        # 1. Banco de Dados SQLite
+        if os.path.exists(DB_FILE):
+            zipf.write(DB_FILE, os.path.basename(DB_FILE))
+            
+        # 2. Arquivos JSON de Configuração, Clientes e Chamados
+        for json_file in [CLIENTES_FILE, EMPRESA_FILE, CHAMADOS_FILE, USUARIOS_FILE]:
+            if os.path.exists(json_file):
+                zipf.write(json_file, os.path.basename(json_file))
+                
+        # 3. Pastas de Histórico de Clientes e Fotos de Vistoria
+        for folder_path, folder_name in [(HISTORICO_CLIENTES_DIR, "historico_clientes"), (PASTA_FOTOS_VISTORIA, "fotos_vistoria")]:
+            if os.path.exists(folder_path):
+                for root, dirs, files in os.walk(folder_path):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, BASE_DIR)
+                        zipf.write(file_path, arcname)
+                        
+    with open(zip_path, "rb") as f:
+        return f.read(), zip_filename
 
-def restaurar_backup(uploaded_file):
+def restaurar_backup_completo(uploaded_file):
     if uploaded_file is not None:
-        perform_backup()
-        with open(DB_FILE, "wb") as f:
+        temp_zip_path = os.path.join(BASE_DIR, "temp_restore.zip")
+        with open(temp_zip_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
-        return True
+            
+        try:
+            with zipfile.ZipFile(temp_zip_path, 'r') as zipf:
+                zipf.extractall(BASE_DIR)
+            if os.path.exists(temp_zip_path):
+                os.remove(temp_zip_path)
+            carregar_json_cached.clear()
+            return True
+        except Exception:
+            if os.path.exists(temp_zip_path):
+                os.remove(temp_zip_path)
+            return False
     return False
 
 # --- CARREGAMENTO E SALVAMENTO JSON ---
@@ -83,7 +114,7 @@ def carregar_json_cached(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except:
+        except Exception:
             return None
     return None
 
@@ -112,7 +143,7 @@ def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict):
         try:
             with open(historico_path, "r", encoding="utf-8") as f_hist:
                 historico_lista = json.load(f_hist)
-        except:
+        except Exception:
             pass
             
     detalhes_dict["data"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -343,7 +374,6 @@ def gerar_pdf_preventiva():
     nome_tecnico = st.session_state.get('resp_tecnico', empresa_db.get("resp_tecnico", "Eli Silva"))
     crea_tecnico = empresa_db.get("crea", "")
     
-    # Exibe a Razão Social do Cliente/Condomínio e o CNPJ no campo do cliente
     razao_social_cliente = st.session_state.get('cliente', '')
     cnpj_cliente = st.session_state.get('cnpj', '')
 
@@ -433,10 +463,12 @@ if menu == "📋 Nova Vistoria / Laudo":
     st.header("📋 Emissão de Relatório / Vistoria Preventiva")
     
     if clientes_db:
-        lista_cli = ["-- Selecionar Cliente Cadastrado --"] + sorted(list(clientes_db.keys()))
+        # Filtra apenas clientes ativos para seleção rápida
+        clientes_ativos = {k: v for k, v in clientes_db.items() if v.get("ativo", True)}
+        lista_cli = ["-- Selecionar Cliente Cadastrado --"] + sorted(list(clientes_ativos.keys()))
         cli_sel = st.selectbox("Carregar Dados de Cliente Existente", lista_cli)
         if cli_sel != "-- Selecionar Cliente Cadastrado --":
-            info_c = clientes_db[cli_sel]
+            info_c = clientes_ativos[cli_sel]
             st.session_state["cliente"] = cli_sel
             st.session_state["cnpj"] = info_c.get("cnpj", "")
             st.session_state["endereco"] = info_c.get("endereco", "")
@@ -452,7 +484,6 @@ if menu == "📋 Nova Vistoria / Laudo":
         st.session_state["endereco"] = st.text_input("Endereço", value=st.session_state["endereco"])
         st.session_state["data_visita"] = st.date_input("Data da Visita", datetime.strptime(st.session_state["data_visita"], "%Y-%m-%d") if isinstance(st.session_state["data_visita"], str) else datetime.now()).strftime("%Y-%m-%d")
         
-        # Opções de Seleção do Tipo de Visita
         opcoes_visita = [
             "Preventiva Mensal", 
             "Preventiva Trimestral", 
@@ -495,7 +526,6 @@ if menu == "📋 Nova Vistoria / Laudo":
         st.session_state["avisadores"] = st.text_input("Qtd. Avisadores Sonoros/Visuais", value=st.session_state["avisadores"])
         st.session_state["status_geral"] = st.selectbox("Status Geral da Vistoria", ["CONFORME / SISTEMA OPERACIONAL", "SISTEMA COM ANOMALIAS / NECESSITA REPAROS", "CRÍTICO / OPERAÇÃO PARCIAL"], index=0)
 
-    # RENDERIZAÇÃO DAS SEÇÕES 3, 4, 5 e 6
     titulos_secoes = {
         "sec3": "3. Inspeção e Testes Funcionais da Central / Fonte Auxiliar",
         "sec4": "4. Infraestrutura e Laços de Comunicação (SDAI)",
@@ -640,7 +670,7 @@ elif menu == "📅 Agenda de Atividades":
 
     with tab_a1:
         conn = sqlite3.connect(DB_FILE)
-        df_agenda = pd.read_sql_query("SELECT id AS ID, task AS Tarefa, category AS Categoria, due_date AS 'Data Prevista', status AS Status FROM agenda ORDER BY due_date ASC", conn)
+        df_agenda = pd.read_sql_query("SELECT id AS ID, task AS Tarefa, category AS Categoria, due_date AS 'Data Prevista', status AS Status FROM agenda WHERE ativo = 1 ORDER BY due_date ASC", conn)
         conn.close()
 
         col_m1, col_m2, col_m3 = st.columns([2, 2, 3])
@@ -698,13 +728,13 @@ elif menu == "📅 Agenda de Atividades":
                         st.success(f"Status do ID #{id_agenda} atualizado!")
                         st.rerun()
 
-                if st.button("🗑️ Excluir Item da Agenda"):
+                if st.button("🗑️ Desativar Item da Agenda (Soft Delete)"):
                     conn = sqlite3.connect(DB_FILE)
                     cursor = conn.cursor()
-                    cursor.execute("DELETE FROM agenda WHERE id = ?", (id_agenda,))
+                    cursor.execute("UPDATE agenda SET ativo = 0 WHERE id = ?", (id_agenda,))
                     conn.commit()
                     conn.close()
-                    st.success(f"Item #{id_agenda} excluído!")
+                    st.success(f"Item #{id_agenda} arquivado com segurança!")
                     st.rerun()
             else:
                 st.info("Nenhuma atividade cadastrada.")
@@ -715,7 +745,7 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
     tab_c1, tab_c2, tab_c3 = st.tabs([
         "🔍 Consultar Clientes e Histórico", 
         "➕ Cadastrar / Editar Cliente", 
-        "🗑️ Gerenciar / Excluir Cliente"
+        "🗑️ Gerenciar / Arquivar Cliente"
     ])
     
     with tab_c2:
@@ -740,7 +770,8 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                         "sindico": sindico_cli,
                         "zelador": zelador_cli,
                         "telefone": tel_cli,
-                        "email": email_cli
+                        "email": email_cli,
+                        "ativo": True
                     }
                     salvar_json(CLIENTES_FILE, clientes_db)
                     st.success(f"Cliente '{nome_formatado}' gravado com sucesso!")
@@ -749,14 +780,18 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                     st.error("Informe o nome do cliente.")
 
     with tab_c3:
-        st.subheader("Excluir Cliente")
+        st.subheader("Arquivar Cliente (Proteção contra perda de histórico)")
         if clientes_db:
-            cli_excluir = st.selectbox("Selecione o Cliente para Excluir", list(clientes_db.keys()), key="del_cli_select")
-            if st.button("🗑️ Confirmar Exclusão de Cliente", type="primary"):
-                del clientes_db[cli_excluir]
-                salvar_json(CLIENTES_FILE, clientes_db)
-                st.success(f"Cliente '{cli_excluir}' removido com sucesso!")
-                st.rerun()
+            clientes_ativos_lista = [k for k, v in clientes_db.items() if v.get("ativo", True)]
+            if clientes_ativos_lista:
+                cli_excluir = st.selectbox("Selecione o Cliente para Arquivar", clientes_ativos_lista, key="del_cli_select")
+                if st.button("📦 Arquivar Cliente (Mantém Histórico Seguro)", type="primary"):
+                    clientes_db[cli_excluir]["ativo"] = False
+                    salvar_json(CLIENTES_FILE, clientes_db)
+                    st.success(f"Cliente '{cli_excluir}' foi arquivado com segurança (histórico preservado)!")
+                    st.rerun()
+            else:
+                st.info("Nenhum cliente ativo para arquivar.")
 
     with tab_c1:
         st.subheader("Base de Clientes")
@@ -767,6 +802,7 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                 st.write(f"**CNPJ:** {info.get('cnpj', '')}")
                 st.write(f"**Endereço:** {info.get('endereco', '')}")
                 st.write(f"**Telefone:** {info.get('telefone', '')}")
+                st.write(f"**Status:** {'Ativo' if info.get('ativo', True) else 'Arquivado'}")
                 
                 nome_pasta_cliente = "".join(c for c in cli_selecionado.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
                 cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
@@ -778,11 +814,6 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                         hist_data = json.load(f_h)
                     df_hist = pd.DataFrame(hist_data)
                     st.dataframe(df_hist, use_container_width=True)
-                    
-                    if st.button("🧹 Limpar Histórico do Cliente"):
-                        os.remove(historico_path)
-                        st.success("Histórico deste cliente foi limpo.")
-                        st.rerun()
                 else:
                     st.info("Nenhum histórico gravado para este cliente até o momento.")
         else:
@@ -868,22 +899,25 @@ elif menu == "🎫 Chamados Técnicos":
         st.info("Nenhum chamado aberto até o momento.")
 
 elif menu == "💾 Backup & Restauração":
-    st.header("💾 Backup e Restauração de Dados")
+    st.header("💾 Backup 100% Completo & Restauração de Dados")
+    st.info("ℹ️ O backup diário completo compacta 100% da base SQLite, arquivos JSON (clientes, empresas, usuários, chamados), histórico de atendimentos e todas as fotos de vistorias.")
     
     col_b1, col_b2 = st.columns(2)
     with col_b1:
-        st.subheader("1. Fazer Backup")
-        if st.button("📦 Gerar Arquivo de Backup"):
-            data_bytes, file_name = perform_backup()
+        st.subheader("1. Gerar Backup Completo")
+        if st.button("📦 Gerar e Baixar Backup 100% Completo (.zip)", type="primary"):
+            data_bytes, file_name = perform_backup_completo()
             if data_bytes:
-                st.success(f"Backup gerado: `{file_name}`")
-                st.download_button("⬇️ Baixar Backup (.db)", data_bytes, file_name=file_name, mime="application/x-sqlite3")
+                st.success(f"Backup gerado com sucesso: `{file_name}`")
+                st.download_button("⬇️ Baixar Pacote de Backup (.zip)", data_bytes, file_name=file_name, mime="application/zip")
 
     with col_b2:
-        st.subheader("2. Restaurar Backup")
-        uploaded_backup = st.file_uploader("Carregar arquivo de backup (.db)", type=["db"])
+        st.subheader("2. Restaurar Sistema do Backup")
+        uploaded_backup = st.file_uploader("Carregar pacote de backup (.zip)", type=["zip"])
         if uploaded_backup is not None:
-            if st.button("⚠️ Restaurar Banco de Dados", type="primary"):
-                if restaurar_backup(uploaded_backup):
-                    st.success("Banco de dados restaurado com sucesso! Recarregue a página.")
+            if st.button("⚠️ Restaurar 100% dos Dados", type="primary"):
+                if restaurar_backup_completo(uploaded_backup):
+                    st.success("Sistema restaurado com sucesso! Todos os dados, históricos e relatórios foram recuperados. Recarregue a página.")
                     st.rerun()
+                else:
+                    st.error("Erro ao processar o arquivo de backup.")
