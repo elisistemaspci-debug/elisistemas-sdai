@@ -25,7 +25,6 @@ CLIENTES_FILE = os.path.join(BASE_DIR, "clientes.json")
 EMPRESA_FILE = os.path.join(BASE_DIR, "empresa.json")
 CHAMADOS_FILE = os.path.join(BASE_DIR, "chamados.json")
 USUARIOS_FILE = os.path.join(BASE_DIR, "usuarios.json")
-PERMISSOES_FILE = os.path.join(BASE_DIR, "permissoes.json")
 VENCIMENTOS_FILE = os.path.join(BASE_DIR, "vencimentos.json")
 LOGO_PATH = os.path.join(BASE_DIR, "logo_empresa.png")
 PASTA_FOTOS_VISTORIA = os.path.join(BASE_DIR, "fotos_vistoria")
@@ -35,19 +34,6 @@ BACKUP_DIR = os.path.join(BASE_DIR, "backups")
 os.makedirs(PASTA_FOTOS_VISTORIA, exist_ok=True)
 os.makedirs(HISTORICO_CLIENTES_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
-
-# Lista Global de Todos os Módulos do Sistema
-TODOS_MODULOS = [
-    "📋 Nova Vistoria / Laudo", 
-    "📂 Rascunhos de Vistoria", 
-    "📊 Controle de Vencimentos",
-    "📅 Agenda de Atividades", 
-    "📂 Clientes & Histórico", 
-    "🏢 Dados da Empresa", 
-    "👥 Gestão de Usuários",
-    "🎫 Chamados Técnicos", 
-    "💾 Backup & Restauração"
-]
 
 # ==============================================================================
 # 2. GESTÃO DO BANCO DE DADOS SQLITE & BACKUPS
@@ -89,7 +75,7 @@ def perform_backup_completo():
         if os.path.exists(DB_FILE):
             zipf.write(DB_FILE, os.path.basename(DB_FILE))
             
-        for json_file in [CLIENTES_FILE, EMPRESA_FILE, CHAMADOS_FILE, USUARIOS_FILE, VENCIMENTOS_FILE, PERMISSOES_FILE]:
+        for json_file in [CLIENTES_FILE, EMPRESA_FILE, CHAMADOS_FILE, USUARIOS_FILE, VENCIMENTOS_FILE]:
             if os.path.exists(json_file):
                 zipf.write(json_file, os.path.basename(json_file))
                 
@@ -189,16 +175,8 @@ empresa_db = carregar_json(EMPRESA_FILE, {
     "resp_tecnico": "Eli Silva"
 })
 chamados_db = carregar_json(CHAMADOS_FILE, [])
-
-# Gestão do Banco de Usuários e Matriz de Permissões
 usuarios = carregar_json(USUARIOS_FILE, {
-    "admin": {"senha": "123", "nome": "Eli Silva", "perfil": "master", "cliente_vinculado": "", "modulos_permitidos": TODOS_MODULOS}
-})
-
-permissoes_perfis = carregar_json(PERMISSOES_FILE, {
-    "master": TODOS_MODULOS,
-    "tecnico": ["📋 Nova Vistoria / Laudo", "📂 Rascunhos de Vistoria", "📊 Controle de Vencimentos", "📅 Agenda de Atividades", "📂 Clientes & Histórico", "🎫 Chamados Técnicos"],
-    "cliente": ["🎫 Chamados Técnicos"]
+    "admin": {"senha": "123", "nome": "Eli Silva", "perfil": "master", "cliente_vinculado": ""}
 })
 
 ITENS_SECOES = {
@@ -257,23 +235,13 @@ if "perfil" not in st.session_state:
     st.session_state["perfil"] = ""
 if "cliente_vinculado" not in st.session_state:
     st.session_state["cliente_vinculado"] = ""
-if "modulos_permitidos" not in st.session_state:
-    st.session_state["modulos_permitidos"] = []
 
 def verificar_credenciais(u_input, s_input):
     if u_input in usuarios and usuarios[u_input]["senha"] == s_input:
         st.session_state["logged_in"] = True
         st.session_state["user"] = u_input
-        user_perfil = usuarios[u_input].get("perfil", "cliente")
-        st.session_state["perfil"] = user_perfil
+        st.session_state["perfil"] = usuarios[u_input].get("perfil", "cliente")
         st.session_state["cliente_vinculado"] = usuarios[u_input].get("cliente_vinculado", "")
-        
-        mod_user = usuarios[u_input].get("modulos_permitidos")
-        if mod_user is not None and isinstance(mod_user, list) and len(mod_user) > 0:
-            st.session_state["modulos_permitidos"] = mod_user
-        else:
-            st.session_state["modulos_permitidos"] = permissoes_perfis.get(user_perfil, ["🎫 Chamados Técnicos"])
-            
         return True
     return False
 
@@ -512,44 +480,6 @@ def gerar_pdf_preventiva():
 
     return pdf_data
 
-# ==============================================================================
-# 6. RESET E CALLBACKS DO FORMULÁRIO DE VISTORIA
-# ==============================================================================
-def limpar_formulario_vistoria():
-    """Atribuição: Limpar e resetar todos os campos do formulário para o estado padrão após gerar o PDF."""
-    defaults = {
-        "cliente": "", "cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP",
-        "sindico": "", "zelador": "", "contato": "", "email": "",
-        "data_visita": datetime.now().strftime("%Y-%m-%d"), "tipo_visita": "Preventiva Trimestral",
-        "resp_tecnico": empresa_db.get("resp_tecnico", "Eli Silva"), "acompanhante": "",
-        "status_geral": "CONFORME / SISTEMA OPERACIONAL", "central_sdai": "",
-        "tipo_central": "SISTEMA ENDEREÇÁVEL", "qtd_lacos": "", "det_fumaca": "",
-        "acionadores": "", "avisadores": "", "pressurizacao": "Sim",
-        "tensao_baterias": "24 Vcc", "parecer": "", "orientacoes": "", "fotos_detalhes": [],
-        "cli_sel_key": "-- Selecionar Cliente Cadastrado --"
-    }
-    for k, v in defaults.items():
-        st.session_state[k] = v
-
-    for sec_key in ITENS_SECOES:
-        for idx, _ in enumerate(ITENS_SECOES[sec_key]):
-            st.session_state[f"{sec_key}_{idx}_val"] = ""
-            st.session_state[f"{sec_key}_{idx}_obs"] = ""
-            st.session_state[f"{sec_key}_{idx}_status"] = "CONFORME"
-
-def carregar_dados_cliente_selecionado():
-    """Atribuição: Atualizar dinamicamente todos os campos da tela ao trocar o cliente no selectbox."""
-    cli_sel = st.session_state.get("cli_sel_key", "-- Selecionar Cliente Cadastrado --")
-    if cli_sel != "-- Selecionar Cliente Cadastrado --" and cli_sel in clientes_db:
-        info_c = clientes_db[cli_sel]
-        st.session_state["cliente"] = cli_sel
-        st.session_state["cnpj"] = info_c.get("cnpj", "")
-        st.session_state["endereco"] = info_c.get("endereco", "")
-        st.session_state["sindico"] = info_c.get("sindico", "")
-        st.session_state["zelador"] = info_c.get("zelador", "")
-        st.session_state["contato"] = info_c.get("telefone", "")
-        st.session_state["email"] = info_c.get("email", "")
-
 def inicializar_defaults():
     defaults = {
         "cliente": "", "cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP",
@@ -559,8 +489,7 @@ def inicializar_defaults():
         "status_geral": "CONFORME / SISTEMA OPERACIONAL", "central_sdai": "",
         "tipo_central": "SISTEMA ENDEREÇÁVEL", "qtd_lacos": "", "det_fumaca": "",
         "acionadores": "", "avisadores": "", "pressurizacao": "Sim",
-        "tensao_baterias": "24 Vcc", "parecer": "", "orientacoes": "", "fotos_detalhes": [],
-        "cli_sel_key": "-- Selecionar Cliente Cadastrado --"
+        "tensao_baterias": "24 Vcc", "parecer": "", "orientacoes": "", "fotos_detalhes": []
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -578,7 +507,7 @@ def inicializar_defaults():
 inicializar_defaults()
 
 # ==============================================================================
-# 7. NAVEGAÇÃO E INTERFACE LATERAL COM FILTRO RBAC
+# 6. NAVEGAÇÃO E INTERFACE LATERAL
 # ==============================================================================
 with st.sidebar:
     st.title("⚡ Eli Sistemas")
@@ -589,41 +518,43 @@ with st.sidebar:
         st.session_state["user"] = ""
         st.session_state["perfil"] = ""
         st.session_state["cliente_vinculado"] = ""
-        st.session_state["modulos_permitidos"] = []
         st.rerun()
         
     st.divider()
 
     if st.session_state["perfil"] == "master":
-        opcoes_menu = TODOS_MODULOS
+        opcoes_menu = [
+            "📋 Nova Vistoria / Laudo", 
+            "📂 Rascunhos de Vistoria", 
+            "📊 Controle de Vencimentos",
+            "📅 Agenda de Atividades", 
+            "📂 Clientes & Histórico", 
+            "🏢 Dados da Empresa", 
+            "👥 Gestão de Usuários",
+            "🎫 Chamados Técnicos", 
+            "💾 Backup & Restauração"
+        ]
     else:
-        opcoes_menu = st.session_state.get("modulos_permitidos", ["🎫 Chamados Técnicos"])
-        if not opcoes_menu:
-            opcoes_menu = ["🎫 Chamados Técnicos"]
+        opcoes_menu = ["🎫 Chamados Técnicos"]
         
     menu = st.radio("Navegação Principal", opcoes_menu)
 
 # ==============================================================================
-# 8. ROTINAS DE PÁGINAS DO MENU
+# 7. ROTINAS DE PÁGINAS DO MENU
 # ==============================================================================
 
 if menu == "📋 Nova Vistoria / Laudo":
     st.header("📋 Emissão de Relatório / Vistoria Preventiva")
     
-    # Selectbox com carregamento dinâmico e atualização automática dos campos
     if clientes_db:
         clientes_ativos = {k: v for k, v in clientes_db.items() if v.get("ativo", True)}
         lista_cli = ["-- Selecionar Cliente Cadastrado --"] + sorted(list(clientes_ativos.keys()))
-        
-        if "cli_sel_key" not in st.session_state:
-            st.session_state["cli_sel_key"] = "-- Selecionar Cliente Cadastrado --"
-            
-        st.selectbox(
-            "Carregar Dados de Cliente Existente", 
-            lista_cli, 
-            key="cli_sel_key", 
-            on_change=carregar_dados_cliente_selecionado
-        )
+        cli_sel = st.selectbox("Carregar Dados de Cliente Existente", lista_cli)
+        if cli_sel != "-- Selecionar Cliente Cadastrado --":
+            info_c = clientes_ativos[cli_sel]
+            st.session_state["cliente"] = cli_sel
+            st.session_state["cnpj"] = info_c.get("cnpj", "")
+            st.session_state["endereco"] = info_c.get("endereco", "")
 
     st.subheader("1. Dados Gerais da Edificação")
     col1, col2 = st.columns(2)
@@ -755,22 +686,9 @@ if menu == "📋 Nova Vistoria / Laudo":
 
     with col_btn2:
         if st.button("📄 Gerar e Salvar PDF do Relatório", type="primary"):
-            if not st.session_state["cliente"]:
-                st.error("Preencha o nome do cliente antes de gerar o PDF.")
-            else:
-                pdf_bytes = gerar_pdf_preventiva()
-                st.success("Relatório PDF gerado com sucesso!")
-                
-                st.download_button(
-                    "💾 Baixar Relatório PDF Completo", 
-                    pdf_bytes, 
-                    file_name=f"Vistoria_{st.session_state['cliente']}.pdf", 
-                    mime="application/pdf"
-                )
-                
-                # Reseta automaticamente todos os campos da tela e volta o selectbox para o padrão
-                limpar_formulario_vistoria()
-                st.info("🔄 Formulário limpo! Selecione um novo cliente para iniciar a próxima vistoria.")
+            pdf_bytes = gerar_pdf_preventiva()
+            st.success("Relatório gerado com fotos e campo de assinaturas!")
+            st.download_button("💾 Baixar Relatório PDF Completo", pdf_bytes, file_name=f"Vistoria_{st.session_state['cliente']}.pdf", mime="application/pdf")
 
 elif menu == "📂 Rascunhos de Vistoria":
     st.header("📂 Rascunhos de Vistoria")
@@ -1028,7 +946,7 @@ elif menu == "📅 Agenda de Atividades":
             else:
                 st.info("Nenhuma atividade cadastrada.")
 
-elif menu == "📂 Clientes & Histórico":
+elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "master":
     st.header("📂 Clientes & Histórico de Atendimentos")
     
     tab_c1, tab_c2, tab_c3 = st.tabs([
@@ -1142,102 +1060,32 @@ elif menu == "🏢 Dados da Empresa":
             st.success("Dados da empresa atualizados com sucesso!")
 
 elif menu == "👥 Gestão de Usuários":
-    st.header("👥 Gestão de Usuários, Senhas e Acessos (RBAC)")
-    st.info("💡 **Controle de Acesso Dinâmico:** O Admin pode criar logins para clientes e colaboradores, definindo explicitamente quais botões e telas cada senha terá permissão para visualizar.")
-
-    tab_u1, tab_u2, tab_u3 = st.tabs(["➕ Cadastrar Novo Usuário/Senha", "📋 Usuários Cadastrados", "⚙️ Regras Padrão dos Perfis"])
-
-    with tab_u1:
-        st.subheader("Cadastrar / Atualizar Credenciais de Acesso")
-        with st.form("form_usuarios_rbac"):
-            col_usr1, col_usr2 = st.columns(2)
-            with col_usr1:
-                novo_u = st.text_input("Nome de Usuário (Login)").strip().lower()
-                nova_s = st.text_input("Senha", type="password")
-                nome_completo_u = st.text_input("Nome Completo / Identificação")
-            with col_usr2:
-                novo_p = st.selectbox("Perfil de Acesso", ["master", "tecnico", "cliente"])
-                cli_vinc = st.selectbox("Vincular a Cliente (Opcional)", [""] + sorted(list(clientes_db.keys())))
-                
-            st.divider()
-            st.write("🔑 **Marque abaixo quais telas este usuário poderá acessar:**")
-            
-            modulos_selecionados = []
-            cols_mod = st.columns(3)
-            for idx_m, mod_nome in enumerate(TODOS_MODULOS):
-                with cols_mod[idx_m % 3]:
-                    padrao_chk = True if novo_p == "master" else (mod_nome in permissoes_perfis.get(novo_p, []))
-                    if st.checkbox(mod_nome, value=padrao_chk, key=f"chk_m_{idx_m}"):
-                        modulos_selecionados.append(mod_nome)
-
-            if st.form_submit_button("💾 Cadastrar Credencial com Permissões", type="primary"):
-                if novo_u and nova_s:
-                    usuarios[novo_u] = {
-                        "senha": nova_s,
-                        "nome": nome_completo_u if nome_completo_u else novo_u,
-                        "perfil": novo_p,
-                        "cliente_vinculado": cli_vinc,
-                        "modulos_permitidos": modulos_selecionados
-                    }
-                    salvar_json(USUARIOS_FILE, usuarios)
-                    st.success(f"Usuário '{novo_u}' cadastrado com sucesso e permissões atualizadas!")
-                    st.rerun()
-                else:
-                    st.error("Preencha o nome de usuário e a senha.")
-
-    with tab_u2:
-        st.subheader("Relação de Senhas Cadastradas no Sistema")
-        if usuarios:
-            dados_tabela_usr = []
-            for u_k, u_v in usuarios.items():
-                dados_tabela_usr.append({
-                    "Usuário/Login": u_k,
-                    "Nome": u_v.get("nome", u_k),
-                    "Perfil": u_v.get("perfil", "cliente").upper(),
-                    "Cliente Vinculado": u_v.get("cliente_vinculado", "N/A"),
-                    "Módulos Liberados": len(u_v.get("modulos_permitidos", TODOS_MODULOS))
-                })
-            st.dataframe(pd.DataFrame(dados_tabela_usr), use_container_width=True)
-
-            with st.expander("🗑️ Excluir Usuário"):
-                usr_del = st.selectbox("Selecione o Usuário para Remover", [u for u in usuarios.keys() if u != "admin"])
-                if st.button("Remover Acesso"):
-                    del usuarios[usr_del]
-                    salvar_json(USUARIOS_FILE, usuarios)
-                    st.success(f"Acesso do usuário '{usr_del}' removido!")
-                    st.rerun()
-
-    with tab_u3:
-        st.subheader("Configuração Global de Permissões por Categoria")
-        st.caption("Ajuste aqui as permissões padrão que novos usuários de cada grupo receberão:")
+    st.header("👥 Gestão de Usuários do Sistema")
+    
+    with st.form("form_usuarios"):
+        novo_u = st.text_input("Usuário")
+        nova_s = st.text_input("Senha", type="password")
+        novo_p = st.selectbox("Perfil de Acesso", ["master", "cliente"])
+        cli_vinc = st.selectbox("Vincular a Cliente (Se perfil Cliente)", [""] + sorted(list(clientes_db.keys())))
         
-        with st.form("form_permissoes_globais"):
-            perm_tec = st.multiselect("Módulos Padrão do Perfil TÉCNICO", TODOS_MODULOS, default=permissoes_perfis.get("tecnico", []))
-            perm_cli = st.multiselect("Módulos Padrão do Perfil CLIENTE", TODOS_MODULOS, default=permissoes_perfis.get("cliente", []))
-            
-            if st.form_submit_button("💾 Salvar Regras Globais dos Perfis"):
-                permissoes_perfis["tecnico"] = perm_tec
-                permissoes_perfis["cliente"] = perm_cli
-                salvar_json(PERMISSOES_FILE, permissoes_perfis)
-                st.success("Regras globais de perfis gravadas com sucesso!")
+        if st.form_submit_button("Cadastrar / Atualizar Usuário"):
+            if novo_u and nova_s:
+                usuarios[novo_u] = {"senha": nova_s, "perfil": novo_p, "cliente_vinculado": cli_vinc}
+                salvar_json(USUARIOS_FILE, usuarios)
+                st.success(f"Usuário '{novo_u}' salvo!")
+                st.rerun()
 
 elif menu == "🎫 Chamados Técnicos":
-    st.header("🎫 Chamados Técnicos & Atendimento")
+    st.header("🎫 Chamados Técnicos")
     
     with st.form("form_chamado"):
-        if st.session_state["cliente_vinculado"]:
-            cli_chamado = st.session_state["cliente_vinculado"]
-            st.info(f"Abridor de Chamado Vinculado a: **{cli_chamado}**")
-        else:
-            cli_chamado = st.selectbox("Selecione o Cliente Vinculado", sorted(list(clientes_db.keys())) if clientes_db else ["Geral"])
-            
-        titulo_ch = st.text_input("Título do Chamado / Problema")
-        desc_ch = st.text_area("Descrição Detalhada da Ocorrência")
+        cli_chamado = st.selectbox("Selecione o Cliente Vinculado", sorted(list(clientes_db.keys())) if clientes_db else ["Geral"])
+        titulo_ch = st.text_input("Título do Chamado")
+        desc_ch = st.text_area("Descrição do Problema / Solicitação")
         
-        if st.form_submit_button("📩 ABRIR CHAMADO TÉCNICO", type="primary"):
+        if st.form_submit_button("📩 ABRIR CHAMADO", type="primary"):
             if titulo_ch and desc_ch:
                 chamados_db.append({
-                    "id": len(chamados_db) + 1,
                     "usuario": st.session_state["user"],
                     "cliente": cli_chamado,
                     "titulo": titulo_ch,
@@ -1253,17 +1101,13 @@ elif menu == "🎫 Chamados Técnicos":
 
     st.subheader("Chamados Registrados")
     if chamados_db:
-        df_chamados = pd.DataFrame(chamados_db)
-        if st.session_state["perfil"] == "cliente" and st.session_state["cliente_vinculado"]:
-            df_chamados = df_chamados[df_chamados["cliente"] == st.session_state["cliente_vinculado"]]
-            
-        st.dataframe(df_chamados, use_container_width=True)
+        st.dataframe(pd.DataFrame(chamados_db), use_container_width=True)
     else:
         st.info("Nenhum chamado aberto até o momento.")
 
 elif menu == "💾 Backup & Restauração":
     st.header("💾 Backup 100% Completo & Restauração de Dados")
-    st.info("ℹ️ O backup diário completo compacta 100% da base SQLite (Agenda, Rascunhos e Relatórios), arquivos JSON (clientes, empresas, usuários, permissões, chamados, controle de vencimentos), histórico de atendimentos e todas as fotos de vistorias.")
+    st.info("ℹ️ O backup diário completo compacta 100% da base SQLite (Agenda, Rascunhos e Relatórios), arquivos JSON (clientes, empresas, usuários, chamados, controle de vencimentos), histórico de atendimentos e todas as fotos de vistorias.")
     
     col_b1, col_b2 = st.columns(2)
     with col_b1:
@@ -1280,7 +1124,7 @@ elif menu == "💾 Backup & Restauração":
         if uploaded_backup is not None:
             if st.button("⚠️ Restaurar 100% dos Dados", type="primary"):
                 if restaurar_backup_completo(uploaded_backup):
-                    st.success("Sistema, Permissões, Agenda e Vencimentos restaurados com sucesso! Recarregue a página.")
+                    st.success("Sistema, Agenda e Vencimentos restaurados com sucesso! Recarregue a página.")
                     st.rerun()
                 else:
                     st.error("Erro ao processar o arquivo de backup.")
