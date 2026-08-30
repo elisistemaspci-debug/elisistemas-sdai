@@ -57,7 +57,7 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS rascunhos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cliente TEXT, data_visita TEXT, dados_json TEXT, atualizado_em TEXT
+            cliente TEXT UNIQUE, data_visita TEXT, dados_json TEXT, atualizado_em TEXT
         )
     ''')
     conn.commit()
@@ -133,7 +133,7 @@ def salvar_json(path, data):
     carregar_json_cached.clear()
 
 def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict, pdf_bytes=None):
-    """Atribuição: Gravar log contínuo de atendimentos e salvar PDF vinculado na pasta individual do cliente."""
+    """Atribuição: Gravar log contínuo de atendimentos e salvar PDF vinculado na pasta individual do cliente (com prevenção de duplicatas idênticas consecutivas)."""
     if not nome_cliente:
         return
     nome_pasta_cliente = "".join(c for c in nome_cliente.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
@@ -144,15 +144,6 @@ def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict, pdf_byte
     pdf_dir = os.path.join(cliente_dir, "pdfs")
     os.makedirs(pdf_dir, exist_ok=True)
     
-    caminho_pdf_relativo = ""
-    if pdf_bytes:
-        timestamp_file = datetime.now().strftime('%Y%m%d_%H%M%S')
-        nome_pdf_arq = f"Vistoria_{timestamp_file}.pdf"
-        caminho_pdf_completo = os.path.join(pdf_dir, nome_pdf_arq)
-        with open(caminho_pdf_completo, "wb") as f_pdf:
-            f_pdf.write(pdf_bytes)
-        caminho_pdf_relativo = caminho_pdf_completo
-
     historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
     historico_lista = []
     if os.path.exists(historico_path):
@@ -161,8 +152,35 @@ def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict, pdf_byte
                 historico_lista = json.load(f_hist)
         except Exception:
             pass
+
+    # Trava anti-duplicação: evita registrar a mesma ação exata em um intervalo inferior a 5 segundos
+    agora_dt = datetime.now()
+    if historico_lista:
+        ultimo_registro = historico_lista[-1]
+        ultima_data_str = ultimo_registro.get("data", "")
+        ultimo_tipo = ultimo_registro.get("tipo", "")
+        ultimo_parecer = ultimo_registro.get("parecer", ultimo_registro.get("descricao", ""))
+        
+        atual_parecer = detalhes_dict.get("parecer", detalhes_dict.get("descricao", ""))
+        
+        try:
+            dt_ultimo = datetime.strptime(ultima_data_str, '%Y-%m-%d %H:%M:%S')
+            diferenca_segundos = (agora_dt - dt_ultimo).total_seconds()
+            if diferenca_segundos < 5 and ultimo_tipo == tipo_acao and ultimo_parecer == atual_parecer:
+                return # Ignora duplicata gerada por re-execução do Streamlit
+        except Exception:
+            pass
             
-    detalhes_dict["data"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    caminho_pdf_relativo = ""
+    if pdf_bytes:
+        timestamp_file = agora_dt.strftime('%Y%m%d_%H%M%S')
+        nome_pdf_arq = f"Vistoria_{timestamp_file}.pdf"
+        caminho_pdf_completo = os.path.join(pdf_dir, nome_pdf_arq)
+        with open(caminho_pdf_completo, "wb") as f_pdf:
+            f_pdf.write(pdf_bytes)
+        caminho_pdf_relativo = caminho_pdf_completo
+
+    detalhes_dict["data"] = agora_dt.strftime('%Y-%m-%d %H:%M:%S')
     detalhes_dict["tipo"] = tipo_acao
     detalhes_dict["pdf_path"] = caminho_pdf_relativo
     
@@ -765,17 +783,26 @@ elif menu == "📋 Nova Vistoria / Laudo":
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
         if st.button("💾 Salvar Rascunho Completo", type="secondary"):
-            if st.session_state["cliente"]:
+            nome_cli_rasc = st.session_state.get("cliente", "").strip().upper()
+            if nome_cli_rasc:
                 estado_completo = {k: v for k, v in st.session_state.items() if k not in ["logged_in", "user", "perfil"]}
                 conn = sqlite3.connect(DB_FILE)
                 cursor = conn.cursor()
+                # UPSERT: Insere ou substitui o rascunho existente com base no nome único do cliente
                 cursor.execute(
-                    "INSERT INTO rascunhos (cliente, data_visita, dados_json, atualizado_em) VALUES (?, ?, ?, ?)",
-                    (st.session_state["cliente"], st.session_state["data_visita"], json.dumps(estado_completo), datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    """
+                    INSERT INTO rascunhos (cliente, data_visita, dados_json, atualizado_em) 
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(cliente) DO UPDATE SET 
+                        data_visita = excluded.data_visita,
+                        dados_json = excluded.dados_json,
+                        atualizado_em = excluded.atualizado_em
+                    """,
+                    (nome_cli_rasc, st.session_state["data_visita"], json.dumps(estado_completo), datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                 )
                 conn.commit()
                 conn.close()
-                st.success("Rascunho completo salvo com sucesso!")
+                st.success(f"Rascunho de '{nome_cli_rasc}' salvo com sucesso (substituindo o anterior do mesmo cliente)!")
             else:
                 st.error("Informe o nome do cliente para salvar o rascunho.")
 
@@ -789,7 +816,7 @@ elif menu == "📂 Rascunhos de Vistoria":
     st.header("📂 Rascunhos de Vistoria")
     
     conn = sqlite3.connect(DB_FILE)
-    df_rascunhos = pd.read_sql_query("SELECT id, cliente AS Cliente, data_visita AS 'Data Visita', atualizado_em AS 'Atualizado Em' FROM rascunhos ORDER BY id DESC", conn)
+    df_rascunhos = pd.read_sql_query("SELECT id, cliente AS Cliente, data_visita AS 'Data Visita', atualizado_em AS 'Atualizado Em' FROM rascunhos ORDER BY atualizado_em DESC", conn)
     conn.close()
     
     if not df_rascunhos.empty:
@@ -1107,7 +1134,7 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                 st.write(f"**Status:** {'Ativo' if info.get('ativo', True) else 'Arquivado'}")
                 
                 # ==============================================================
-                # NOVA FUNCIONALIDADE: UPLOAD DE PDF ANTERIOR PARA O CLIENTE
+                # UPLOAD DE PDF ANTERIOR COM TRAVA ANTI-DUPLICAÇÃO (HASH DE ARQUIVO)
                 # ==============================================================
                 st.markdown("---")
                 st.subheader("📁 Anexar / Enviar PDF de Vistoria Anterior")
@@ -1117,34 +1144,42 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                 pdf_upload_dir = os.path.join(cliente_dir, "pdfs")
                 os.makedirs(pdf_upload_dir, exist_ok=True)
                 
-                arquivo_enviado_cli = st.file_uploader(
+                archivo_enviado_cli = st.file_uploader(
                     f"Escolha o arquivo PDF da preventiva para {cli_selecionado}", 
                     type=["pdf"], 
                     key=f"uploader_pdf_{cli_selecionado}"
                 )
                 
-                if arquivo_enviado_cli is not None:
-                    timestamp_upload = datetime.now().strftime('%Y%m%d_%H%M%S')
-                    nome_pdf_salvo = f"Preventiva_Anterior_{timestamp_upload}.pdf"
-                    caminho_salvamento_cli = os.path.join(pdf_upload_dir, nome_pdf_salvo)
+                if archivo_enviado_cli is not None:
+                    file_bytes_pdf = archivo_enviado_cli.getvalue()
+                    pdf_hash = hashlib.md5(file_bytes_pdf).hexdigest()
                     
-                    with open(caminho_salvamento_cli, "wb") as f_up:
-                        f_up.write(arquivo_enviado_cli.getbuffer())
+                    # Chave de controle na sessão para impedir re-processamento do mesmo arquivo no reload
+                    session_key_upload = f"last_uploaded_pdf_hash_{cli_selecionado}"
                     
-                    # Registrar no histórico do cliente a inserção deste PDF anterior
-                    registrar_historico_cliente(
-                        cli_selecionado,
-                        "Upload de Laudo / Preventiva Anterior",
-                        {
-                            "status_geral": "ARQUIVO ANEXADO MANUALMENTE",
-                            "resp_tecnico": st.session_state.get('user', 'Admin'),
-                            "parecer": f"PDF importado manualmente: {arquivo_enviado_cli.name}"
-                        },
-                        pdf_bytes=arquivo_enviado_cli.getvalue()
-                    )
-                    
-                    st.success(f"PDF '{arquivo_enviado_cli.name}' enviado e salvo no histórico do cliente com sucesso!")
-                    st.rerun()
+                    if st.session_state.get(session_key_upload) != pdf_hash:
+                        st.session_state[session_key_upload] = pdf_hash
+                        
+                        timestamp_upload = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        nome_pdf_salvo = f"Preventiva_Anterior_{timestamp_upload}.pdf"
+                        caminho_salvamento_cli = os.path.join(pdf_upload_dir, nome_pdf_salvo)
+                        
+                        with open(caminho_salvamento_cli, "wb") as f_up:
+                            f_up.write(file_bytes_pdf)
+                        
+                        registrar_historico_cliente(
+                            cli_selecionado,
+                            "Upload de Laudo / Preventiva Anterior",
+                            {
+                                "status_geral": "ARQUIVO ANEXADO MANUALMENTE",
+                                "resp_tecnico": st.session_state.get('user', 'Admin'),
+                                "parecer": f"PDF importado manualmente: {archivo_enviado_cli.name}"
+                            },
+                            pdf_bytes=file_bytes_pdf
+                        )
+                        
+                        st.success(f"PDF '{archivo_enviado_cli.name}' enviado e salvo no histórico do cliente com sucesso!")
+                        st.rerun()
                 # ==============================================================
 
                 historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
@@ -1257,7 +1292,6 @@ elif menu == "🎫 Chamados Técnicos":
                     chamados_db.append(novo_registro)
                     salvar_json(CHAMADOS_FILE, chamados_db)
                     
-                    # Registra automaticamente no histórico do cliente também
                     registrar_historico_cliente(
                         cliente_chamado,
                         f"Chamado Técnico: {titulo_chamado}",
