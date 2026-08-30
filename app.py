@@ -1076,60 +1076,46 @@ elif menu == "👥 Gestão de Usuários":
                 st.rerun()
 
 elif menu == "🎫 Chamados Técnicos":
-    st.header("🎫 Chamados Técnicos")
+    st.header("🎫 Gerenciamento de Chamados Técnicos")
     
-    with st.form("form_chamado"):
-        cli_chamado = st.selectbox("Selecione o Cliente Vinculado", sorted(list(clientes_db.keys())) if clientes_db else ["Geral"])
-        titulo_ch = st.text_input("Título do Chamado")
-        desc_ch = st.text_area("Descrição do Problema / Solicitação")
-        
-        if st.form_submit_button("📩 ABRIR CHAMADO", type="primary"):
-            if titulo_ch and desc_ch:
-                chamados_db.append({
-                    "usuario": st.session_state["user"],
-                    "cliente": cli_chamado,
-                    "titulo": titulo_ch,
-                    "descricao": desc_ch,
-                    "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "status": "Aberto"
-                })
-                salvar_json(CHAMADOS_FILE, chamados_db)
-                st.success("Chamado registrado com sucesso!")
-                st.rerun()
-            else:
-                st.error("Preencha o título e a descrição.")
+    with st.expander("Abrir Novo Chamado"):
+        with st.form("form_novo_chamado"):
+            cliente_chamado = st.selectbox("Cliente / Local", sorted(list(clientes_db.keys())) if clientes_db else ["Geral"])
+            titulo_chamado = st.text_input("Título do Problema")
+            desc_chamado = st.text_area("Descrição Detalhada")
+            btn_criar = st.form_submit_button("Cadastrar Chamado")
+            
+            if btn_criar:
+                if cliente_chamado and titulo_chamado:
+                    novo_registro = {
+                        "usuario": st.session_state["user"],
+                        "cliente": cliente_chamado,
+                        "titulo": titulo_chamado,
+                        "descricao": desc_chamado,
+                        "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "status": "Aberto"
+                    }
+                    chamados_db.append(novo_registro)
+                    salvar_json(CHAMADOS_FILE, chamados_db)
+                    st.success("Chamado aberto com sucesso!")
+                    st.rerun()
+                else:
+                    st.warning("Preencha ao menos o Cliente e o Título.")
 
-    st.subheader("Chamados Registrados")
+    st.markdown("---")
+    st.subheader("Lista de Chamados Existentes")
     
     if chamados_db:
         df_chamados = pd.DataFrame(chamados_db)
-        df_chamados.insert(0, "id", range(len(df_chamados)))
-        
-        st.info("💡 Clique na coluna **status** de qualquer chamado para alternar entre **Aberto**, **Pendente** ou **Finalizado**, e depois clique no botão abaixo para salvar.")
         
         df_editado = st.data_editor(
             df_chamados,
-            column_config={
-                "status": st.column_config.SelectboxColumn(
-                    "Status",
-                    help="Selecione o novo status do chamado",
-                    options=["Aberto", "Pendente", "Finalizado"],
-                    required=True,
-                ),
-                "id": st.column_config.NumberColumn("ID", disabled=True),
-                "usuario": st.column_config.TextColumn("Usuário", disabled=True),
-                "cliente": st.column_config.TextColumn("Cliente", disabled=True),
-                "titulo": st.column_config.TextColumn("Título", disabled=True),
-                "descricao": st.column_config.TextColumn("Descrição", disabled=True),
-                "data": st.column_config.TextColumn("Data", disabled=True),
-            },
-            disabled=["id", "usuario", "cliente", "titulo", "descricao", "data"],
-            hide_index=True,
-            key="tabela_status_chamados"
+            num_rows="dynamic",
+            use_container_width=True,
+            key="editor_chamados"
         )
-
+        
         if st.button("Salvar Alterações de Status"):
-            global chamados_db
             novos_dados = []
             for _, linha in df_editado.iterrows():
                 novos_dados.append({
@@ -1141,12 +1127,13 @@ elif menu == "🎫 Chamados Técnicos":
                     "status": linha["status"]
                 })
             
-            chamados_db = novos_dados
+            chamados_db.clear()
+            chamados_db.extend(novos_dados)
             salvar_json(CHAMADOS_FILE, chamados_db)
             st.success("Status atualizados com sucesso!")
             st.rerun()
     else:
-        st.info("Nenhum chamado aberto até o momento.")
+        st.info("Nenhum chamado registrado até o momento.")
 
 elif menu == "💾 Backup & Restauração":
     st.header("💾 Backup 100% Completo & Restauração de Dados")
