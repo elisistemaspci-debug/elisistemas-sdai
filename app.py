@@ -1106,8 +1106,47 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                 st.write(f"**Telefone:** {info.get('telefone', '')}")
                 st.write(f"**Status:** {'Ativo' if info.get('ativo', True) else 'Arquivado'}")
                 
+                # ==============================================================
+                # NOVA FUNCIONALIDADE: UPLOAD DE PDF ANTERIOR PARA O CLIENTE
+                # ==============================================================
+                st.markdown("---")
+                st.subheader("📁 Anexar / Enviar PDF de Vistoria Anterior")
+                
                 nome_pasta_cliente = "".join(c for c in cli_selecionado.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
                 cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
+                pdf_upload_dir = os.path.join(cliente_dir, "pdfs")
+                os.makedirs(pdf_upload_dir, exist_ok=True)
+                
+                arquivo_enviado_cli = st.file_uploader(
+                    f"Escolha o arquivo PDF da preventiva para {cli_selecionado}", 
+                    type=["pdf"], 
+                    key=f"uploader_pdf_{cli_selecionado}"
+                )
+                
+                if arquivo_enviado_cli is not None:
+                    timestamp_upload = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    nome_pdf_salvo = f"Preventiva_Anterior_{timestamp_upload}.pdf"
+                    caminho_salvamento_cli = os.path.join(pdf_upload_dir, nome_pdf_salvo)
+                    
+                    with open(caminho_salvamento_cli, "wb") as f_up:
+                        f_up.write(arquivo_enviado_cli.getbuffer())
+                    
+                    # Registrar no histórico do cliente a inserção deste PDF anterior
+                    registrar_historico_cliente(
+                        cli_selecionado,
+                        "Upload de Laudo / Preventiva Anterior",
+                        {
+                            "status_geral": "ARQUIVO ANEXADO MANUALMENTE",
+                            "resp_tecnico": st.session_state.get('user', 'Admin'),
+                            "parecer": f"PDF importado manualmente: {arquivo_enviado_cli.name}"
+                        },
+                        pdf_bytes=arquivo_enviado_cli.getvalue()
+                    )
+                    
+                    st.success(f"PDF '{arquivo_enviado_cli.name}' enviado e salvo no histórico do cliente com sucesso!")
+                    st.rerun()
+                # ==============================================================
+
                 historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
                 
                 st.subheader("📜 Histórico de Atendimentos, Chamados & Laudos")
