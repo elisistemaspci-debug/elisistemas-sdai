@@ -209,7 +209,7 @@ if not st.session_state["logged_in"]:
     tela_login()
     st.stop()
 
-# --- FUNÇÃO GERADORA DE PDF COM FOTOS E ASSINATURAS ---
+# --- FUNÇÃO GERADORA DE PDF COM TIPO DE VISITA DINÂMICO ---
 def gerar_pdf_preventiva():
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -239,7 +239,7 @@ def gerar_pdf_preventiva():
     story.append(Paragraph("<b>1. DADOS DA EDIFICAÇÃO E IDENTIFICAÇÃO DA VISITA TÉCNICA</b>", style_sec_header))
     dados_edif = [
         [Paragraph(f"<b>CLIENTE:</b> {st.session_state.get('cliente', '')}", style_celula), Paragraph(f"<b>Data da Visita:</b> {st.session_state.get('data_visita', '')}", style_celula)],
-        [Paragraph(f"<b>CNPJ:</b> {st.session_state.get('cnpj', '')}", style_celula), Paragraph(f"<b>Tipo de Visita:</b> {st.session_state.get('tipo_visita', '')}", style_celula)],
+        [Paragraph(f"<b>CNPJ:</b> {st.session_state.get('cnpj', '')}", style_celula), Paragraph(f"<b>Tipo de Visita:</b> {st.session_state.get('tipo_visita', 'Preventiva Trimestral')}", style_celula)],
         [Paragraph(f"<b>Endereço:</b> {st.session_state.get('endereco', '')}", style_celula), Paragraph(f"<b>Responsável Técnico:</b> {st.session_state.get('resp_tecnico', '')}", style_celula)]
     ]
     t_edif = Table(dados_edif, colWidths=[330, 225])
@@ -362,7 +362,7 @@ def gerar_pdf_preventiva():
 
     nome_cliente_atual = st.session_state.get('cliente', '').strip()
     if nome_cliente_atual:
-        registrar_historico_cliente(nome_cliente_atual, "Relatório de Vistoria Preventiva", {
+        registrar_historico_cliente(nome_cliente_atual, f"Relatório de Vistoria ({st.session_state.get('tipo_visita', 'Preventiva Trimestral')})", {
             "status_geral": st.session_state.get('status_geral', 'CONFORME'),
             "resp_tecnico": st.session_state.get('resp_tecnico', empresa_db.get("resp_tecnico", "Eli Silva"))
         })
@@ -449,6 +449,32 @@ if menu == "📋 Nova Vistoria / Laudo":
     with col2:
         st.session_state["endereco"] = st.text_input("Endereço", value=st.session_state["endereco"])
         st.session_state["data_visita"] = st.date_input("Data da Visita", datetime.strptime(st.session_state["data_visita"], "%Y-%m-%d") if isinstance(st.session_state["data_visita"], str) else datetime.now()).strftime("%Y-%m-%d")
+        
+        # Opções de Seleção do Tipo de Visita
+        opcoes_visita = [
+            "Preventiva Mensal", 
+            "Preventiva Trimestral", 
+            "Preventiva Semestral", 
+            "Preventiva Anual", 
+            "Corretiva / Chamado Técnico", 
+            "Vistoria Inicial / Diagnóstico",
+            "Outro"
+        ]
+        
+        pos_index = 1
+        if st.session_state["tipo_visita"] in opcoes_visita:
+            pos_index = opcoes_visita.index(st.session_state["tipo_visita"])
+        else:
+            pos_index = 6
+            
+        tipo_sel = st.selectbox("Tipo de Visita Técnica", opcoes_visita, index=pos_index)
+        
+        if tipo_sel == "Outro":
+            st.session_state["tipo_visita"] = st.text_input("Especifique o Tipo de Visita", value=st.session_state.get("tipo_visita_custom", ""))
+            st.session_state["tipo_visita_custom"] = st.session_state["tipo_visita"]
+        else:
+            st.session_state["tipo_visita"] = tipo_sel
+            
         st.session_state["zelador"] = st.text_input("Zelador / Resp. Local", value=st.session_state["zelador"])
         st.session_state["email"] = st.text_input("E-mail do Cliente", value=st.session_state["email"])
 
@@ -504,7 +530,6 @@ if menu == "📋 Nova Vistoria / Laudo":
                 with open(caminho_foto, "wb") as f_img:
                     f_img.write(file_bytes)
                 
-                # Exibe preview e campo de legenda para a foto
                 col_f1, col_f2 = st.columns([1, 3])
                 with col_f1:
                     st.image(caminho_foto, width=120)
