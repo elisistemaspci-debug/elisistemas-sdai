@@ -1,391 +1,1235 @@
-import streamlit as st
-import sqlite3
-import hashlib
 import os
+import io
 import json
+import sqlite3
+import shutil
+import hashlib
+import calendar
 import zipfile
-import tempfile
+from datetime import datetime, timedelta
+import streamlit as st
 import pandas as pd
-from datetime import datetime
-from io import BytesIO
-
-# Imports do ReportLab para PDF
-from reportlab.lib.pagesizes import letter, A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, KeepTogether
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-# ==========================================
-# 1. CONFIGURAÇÃO INICIAL DA PÁGINA
-# ==========================================
-st.set_page_config(
-    page_title="Sistema de Gestão Técnica & Vistorias",
-    page_icon="🛡️",
-    layout="wide"
-)
+# ==============================================================================
+# 1. CONFIGURAÇÃO DA PÁGINA E ATRIBUIÇÃO DE DIRETÓRIOS/ARQUIVOS
+# ==============================================================================
+st.set_page_config(page_title="Eli Sistemas - Gestão, Inspeção Técnica e Chamados", page_icon="⚡", layout="wide")
 
-DB_PATH = "sistema.db"
-JSON_STATE_PATH = "estado_sistema.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in locals() else "."
+DB_FILE = os.path.join(BASE_DIR, "eli_sistemas.db")
+CLIENTES_FILE = os.path.join(BASE_DIR, "clientes.json")
+EMPRESA_FILE = os.path.join(BASE_DIR, "empresa.json")
+CHAMADOS_FILE = os.path.join(BASE_DIR, "chamados.json")
+USUARIOS_FILE = os.path.join(BASE_DIR, "usuarios.json")
+PERMISSOES_FILE = os.path.join(BASE_DIR, "permissoes.json")
+VENCIMENTOS_FILE = os.path.join(BASE_DIR, "vencimentos.json")
+LOGO_PATH = os.path.join(BASE_DIR, "logo_empresa.png")
+PASTA_FOTOS_VISTORIA = os.path.join(BASE_DIR, "fotos_vistoria")
+HISTORICO_CLIENTES_DIR = os.path.join(BASE_DIR, "historico_clientes")
+BACKUP_DIR = os.path.join(BASE_DIR, "backups")
 
-# ==========================================
-# 2. SEGURANÇA E GERENCIAMENTO DE USUÁRIOS
-# ==========================================
+os.makedirs(PASTA_FOTOS_VISTORIA, exist_ok=True)
+os.makedirs(HISTORICO_CLIENTES_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
-def init_db_usuarios():
-    """Cria a tabela de usuários caso não exista e insere o usuário admin padrão."""
-    conn = sqlite3.connect(DB_PATH)
+# Lista Global de Todos os Módulos do Sistema
+TODOS_MODULOS = [
+    "📋 Nova Vistoria / Laudo", 
+    "📂 Rascunhos de Vistoria", 
+    "📊 Controle de Vencimentos",
+    "📅 Agenda de Atividades", 
+    "📂 Clientes & Histórico", 
+    "🏢 Dados da Empresa", 
+    "👥 Gestão de Usuários",
+    "🎫 Chamados Técnicos", 
+    "💾 Backup & Restauração"
+]
+
+# ==============================================================================
+# 2. GESTÃO DO BANCO DE DADOS SQLITE & BACKUPS
+# ==============================================================================
+def init_db():
+    """Atribuição: Inicializar tabelas relacionais do SQLite para relatórios, agenda e rascunhos."""
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS usuarios (
+        CREATE TABLE IF NOT EXISTS reports (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            nome TEXT NOT NULL,
-            senha_hash TEXT NOT NULL,
-            salt TEXT NOT NULL,
-            perfil TEXT NOT NULL -- 'Admin', 'Tecnico', 'Consulta'
-        )
-    ''')
-    
-    # Criar tabela de rascunhos/agenda se necessário
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS rascunhos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            titulo TEXT,
-            conteudo TEXT,
-            data_criacao TEXT
+            title TEXT, client TEXT, date TEXT, content TEXT, type TEXT
         )
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS agenda (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            titulo TEXT,
-            data_evento TEXT,
-            descricao TEXT
+            task TEXT, category TEXT, due_date TEXT, status TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS rascunhos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente TEXT, data_visita TEXT, dados_json TEXT, atualizado_em TEXT
         )
     ''')
     conn.commit()
-    
-    # Criar usuário admin padrão se a tabela de usuários estiver vazia
-    cursor.execute("SELECT COUNT(*) FROM usuarios")
-    if cursor.fetchone()[0] == 0:
-        salt = os.urandom(16).hex()
-        # Senha padrão inicial: admin123
-        senha_hash = hashlib.sha256(("admin123" + salt).encode('utf-8')).hexdigest()
-        cursor.execute(
-            "INSERT INTO usuarios (username, nome, senha_hash, salt, perfil) VALUES (?, ?, ?, ?, ?)",
-            ("admin", "Administrador do Sistema", senha_hash, salt, "Admin")
-        )
-        conn.commit()
     conn.close()
 
-def hash_senha(senha: str, salt: str) -> str:
-    """Gera o hash SHA-256 da senha combinada com o salt."""
-    return hashlib.sha256((senha + salt).encode('utf-8')).hexdigest()
+init_db()
 
-def autenticar_usuario(username, senha):
-    """Verifica credenciais no SQLite."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT nome, senha_hash, salt, perfil FROM usuarios WHERE username = ?", (username.strip().lower(),))
-    usuario = cursor.fetchone()
-    conn.close()
-
-    if usuario:
-        nome, senha_hash, salt, perfil = usuario
-        if hash_senha(senha, salt) == senha_hash:
-            return {"username": username, "nome": nome, "perfil": perfil}
-    return None
-
-def cadastrar_usuario(username, nome, senha, perfil):
-    """Cadastra um novo usuário no banco de dados."""
-    salt = os.urandom(16).hex()
-    senha_h = hash_senha(senha, salt)
+def perform_backup_completo():
+    """Atribuição: Compactar 100% da base SQLite, arquivos JSON e fotos em um pacote ZIP."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_filename = f"backup_completo_elisistemas_{timestamp}.zip"
+    zip_path = os.path.join(BACKUP_DIR, zip_filename)
     
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO usuarios (username, nome, senha_hash, salt, perfil) VALUES (?, ?, ?, ?, ?)",
-            (username.strip().lower(), nome.strip(), senha_h, salt, perfil)
-        )
-        conn.commit()
-        conn.close()
-        return True, "Usuário cadastrado com sucesso!"
-    except sqlite3.IntegrityError:
-        return False, "Erro: Este nome de usuário já está em uso."
-    except Exception as e:
-        return False, f"Erro ao cadastrar usuário: {str(e)}"
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        if os.path.exists(DB_FILE):
+            zipf.write(DB_FILE, os.path.basename(DB_FILE))
+            
+        for json_file in [CLIENTES_FILE, EMPRESA_FILE, CHAMADOS_FILE, USUARIOS_FILE, VENCIMENTOS_FILE, PERMISSOES_FILE]:
+            if os.path.exists(json_file):
+                zipf.write(json_file, os.path.basename(json_file))
+                
+        for folder_path, folder_name in [(HISTORICO_CLIENTES_DIR, "historico_clientes"), (PASTA_FOTOS_VISTORIA, "fotos_vistoria")]:
+            if os.path.exists(folder_path):
+                for root, dirs, files in os.walk(folder_path):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, BASE_DIR)
+                        zipf.write(file_path, arcname)
+                        
+    with open(zip_path, "rb") as f:
+        return f.read(), zip_filename
 
-def render_login():
-    """Exibe o formulário de login na tela principal e gerencia a sessão."""
-    init_db_usuarios()
-
-    if "usuario_logado" not in st.session_state:
-        st.session_state["usuario_logado"] = None
-
-    if st.session_state["usuario_logado"] is None:
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.title("🔐 Acesso ao Sistema")
-            with st.form("form_login"):
-                usuario_input = st.text_input("Usuário")
-                senha_input = st.text_input("Senha", type="password")
-                btn_entrar = st.form_submit_button("Entrar", use_container_width=True)
-
-                if btn_entrar:
-                    user = autenticar_usuario(usuario_input, senha_input)
-                    if user:
-                        st.session_state["usuario_logado"] = user
-                        st.success(f"Bem-vindo(a), {user['nome']}!")
-                        st.rerun()
-                    else:
-                        st.error("Usuário ou senha incorretos.")
-        return False
-    
-    # Barra lateral do usuário logado
-    st.sidebar.markdown(f"👤 **Usuário:** {st.session_state['usuario_logado']['nome']}")
-    st.sidebar.markdown(f"🏷️ **Perfil:** `{st.session_state['usuario_logado']['perfil']}`")
-    
-    if st.sidebar.button("🚪 Sair (Logout)", use_container_width=True):
-        st.session_state["usuario_logado"] = None
-        st.rerun()
-        
-    return True
-
-# ==========================================
-# 3. GERENCIAMENTO DE JSON E CACHE
-# ==========================================
-
-@st.cache_data
-def carregar_json_cached():
-    """Carrega as configurações salvas em formato JSON."""
-    if os.path.exists(JSON_STATE_PATH):
+def restaurar_backup_completo(uploaded_file):
+    """Atribuição: Descompactar pacote ZIP e restaurar a estrutura completa de arquivos do sistema."""
+    if uploaded_file is not None:
+        temp_zip_path = os.path.join(BASE_DIR, "temp_restore.zip")
+        with open(temp_zip_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+            
         try:
-            with open(JSON_STATE_PATH, "r", encoding="utf-8") as f:
+            with zipfile.ZipFile(temp_zip_path, 'r') as zipf:
+                zipf.extractall(BASE_DIR)
+            if os.path.exists(temp_zip_path):
+                os.remove(temp_zip_path)
+            carregar_json_cached.clear()
+            return True
+        except Exception:
+            if os.path.exists(temp_zip_path):
+                os.remove(temp_zip_path)
+            return False
+    return False
+
+# ==============================================================================
+# 3. GESTÃO DE PERSISTÊNCIA JSON E HISTÓRICO
+# ==============================================================================
+@st.cache_data
+def carregar_json_cached(path):
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
-            return {}
-    return {}
+            return None
+    return None
 
-def salvar_json(dados):
-    """Salva dados no arquivo JSON e limpa o cache."""
-    with open(JSON_STATE_PATH, "w", encoding="utf-8") as f:
-        json.dump(dados, f, ensure_ascii=False, indent=4)
+def carregar_json(path, default):
+    data = carregar_json_cached(path)
+    return data if data is not None else default
+
+def salvar_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
     carregar_json_cached.clear()
 
-def restaurar_backup_completo(zip_file):
-    """Extrai e restaura os arquivos contidos em um backup .zip."""
-    try:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            zip_path = os.path.join(temp_dir, "backup.zip")
-            with open(zip_path, "wb") as f:
-                f.write(zip_file.getbuffer())
-            
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(".")
+def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict):
+    """Atribuição: Gravar log contínuo de atendimentos na pasta individual do cliente."""
+    if not nome_cliente:
+        return
+    nome_pasta_cliente = "".join(c for c in nome_cliente.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
+    if not nome_pasta_cliente:
+        return
         
-        carregar_json_cached.clear()
-        return True, "Backup restaurado com sucesso!"
-    except Exception as e:
-        return False, f"Erro ao restaurar backup: {str(e)}"
+    cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
+    os.makedirs(cliente_dir, exist_ok=True)
+    
+    historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
+    historico_lista = []
+    if os.path.exists(historico_path):
+        try:
+            with open(historico_path, "r", encoding="utf-8") as f_hist:
+                historico_lista = json.load(f_hist)
+        except Exception:
+            pass
+            
+    detalhes_dict["data"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    detalhes_dict["tipo"] = tipo_acao
+    historico_lista.append(detalhes_dict)
+    
+    with open(historico_path, "w", encoding="utf-8") as f_hist:
+        json.dump(historico_lista, f_hist, ensure_ascii=False, indent=4)
 
-# ==========================================
-# 4. GERAÇÃO DE PDF (REPORTLAB)
-# ==========================================
+# Carregamento inicial de bases
+clientes_db = carregar_json(CLIENTES_FILE, {})
+if not isinstance(clientes_db, dict):
+    clientes_db = {}
 
-def gerar_pdf_relatorio(titulo_doc, dados_tabela, observacoes=""):
-    """Gera um relatório técnico formatado em PDF."""
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        rightMargin=36,
-        leftMargin=36,
-        topMargin=36,
-        bottomMargin=36
-    )
-    
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        'TitleStyle',
-        parent=styles['Heading1'],
-        fontSize=16,
-        alignment=1,
-        spaceAfter=20
-    )
-    normal_style = styles['Normal']
-    
-    story = []
-    story.append(Paragraph(f"<b>{titulo_doc}</b>", title_style))
-    story.append(Spacer(1, 10))
-    
-    if dados_tabela:
-        t = Table(dados_tabela)
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1e3d59")),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-            ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0,0), (-1,-1), 9),
-            ('BOTTOMPADDING', (0,0), (-1,0), 8),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-        ]))
-        story.append(t)
-    
-    if observacoes:
-        story.append(Spacer(1, 15))
-        story.append(Paragraph(f"<b>Observações Gerais:</b> {observacoes}", normal_style))
-    
-    # Bloco de Assinaturas (evita quebra de página isolada)
-    story.append(Spacer(1, 30))
-    assinatura_data = [
-        ["___________________________________", "___________________________________"],
-        ["Técnico Responsável", "Cliente / Contratante"]
+vencimentos_db = carregar_json(VENCIMENTOS_FILE, {})
+empresa_db = carregar_json(EMPRESA_FILE, {
+    "nome": "ELI SISTEMAS PROTEÇÃO CONTRA INCÊNDIO",
+    "cnpj": "68.440.457/0001-50",
+    "crea": "5071689704",
+    "telefone": "(16) 981046121",
+    "email": "elisistemas@gmail.com.br",
+    "endereco": "Rua Floriano Peixoto, 122 - Sala 02 - Centro",
+    "resp_tecnico": "Eli Silva"
+})
+chamados_db = carregar_json(CHAMADOS_FILE, [])
+
+# Gestão do Banco de Usuários e Matriz de Permissões
+usuarios = carregar_json(USUARIOS_FILE, {
+    "admin": {"senha": "123", "nome": "Eli Silva", "perfil": "master", "cliente_vinculado": "", "modulos_permitidos": TODOS_MODULOS}
+})
+
+permissoes_perfis = carregar_json(PERMISSOES_FILE, {
+    "master": TODOS_MODULOS,
+    "tecnico": ["📋 Nova Vistoria / Laudo", "📂 Rascunhos de Vistoria", "📊 Controle de Vencimentos", "📅 Agenda de Atividades", "📂 Clientes & Histórico", "🎫 Chamados Técnicos"],
+    "cliente": ["🎫 Chamados Técnicos"]
+})
+
+ITENS_SECOES = {
+    "sec3": [
+        ("3.1 Alimentação Principal (AC)", "Rede elétrica estável 220V ± 10% (NBR 5410)"),
+        ("3.2 Estado Físico das Baterias", "Ausência de vazamento, estufamento e oxidação"),
+        ("3.3 Tensão / Carga das Baterias", "Regime de flutuação adequado (25.2V - 27.6V)"),
+        ("3.4 Ensaio de Autonomia (DC)", "Simulação de corte de energia (operação em Vcc)"),
+        ("3.5 Proteção Elétrica / Quadro AC", "Circuito exclusivo, disjuntor id. e DPS (NBR 5410)"),
+        ("3.6 Painel Indicador / Display / Buzzer", "Sinalização visual e audível na central de alarme")
+    ],
+    "sec4": [
+        ("4.1 Tensão de Operação do Laço", "Estabilidade de comunicação Vcc nos dispositivos"),
+        ("4.2 Pesquisa de Fuga de Terra (Shield)", "Aterramento da blindagem e ausência de fuga a terra"),
+        ("4.3 Supervisionamento de Ruptura de Linha", "Simulação de circuito aberto em laço/zona"),
+        ("4.4 Atuação de Relés e Interconexão", "Comando de relés auxiliares / retenção")
+    ],
+    "sec5": [
+        ("5.1 Detectores de Fumaça / Térmicos", "Mínimo 25% por trimestre (100% ao ano - ensaio com aerossol/calor)"),
+        ("5.2 Acionadores Manuais (Botoeiras)", "Acesso desimpedido, rearme e atuação mecânica"),
+        ("5.3 Avisadores Sonoros e Visuais", "Nível de pressões sonoras adequadas (> 65 dB) e flash visível"),
+        ("5.4 Módulos de Entrada e Saída", "Endereçamento correto e supervisão de atuadores")
+    ],
+    "sec6": [
+        ("6.1 Pressurização de Escadas (IT 13)", "Acionamento por fluxo/pressostato ou central SDAI"),
+        ("6.2 Portas Corta-Fogo / Eletroímãs", "Liberação automática dos eletroímãs em caso de alarme geral")
     ]
-    t_ass = Table(assinatura_data, colWidths=[250, 250])
-    t_ass.setStyle(TableStyle([
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('FONTSIZE', (0,0), (-1,-1), 9),
+}
+
+def calcular_status_vencimento(data_str):
+    """Atribuição: Calcular diferença de dias até o vencimento e retornar rotulo com alerta (30 dias)."""
+    if not data_str or data_str == "N/A":
+        return "⚪ Não Informado", "gray"
+    try:
+        dt_venc = datetime.strptime(data_str, "%Y-%m-%d").date()
+        hoje = datetime.now().date()
+        dias_restantes = (dt_venc - hoje).days
+
+        if dias_restantes < 0:
+            return f"🔴 VENCIDO ({abs(dias_restantes)}d)", "red"
+        elif dias_restantes <= 30:
+            return f"🟡 VENCE EM BREVE ({dias_restantes}d)", "orange"
+        else:
+            return "🟢 EM DIA / OK", "green"
+    except Exception:
+        return "⚪ Data Inválida", "gray"
+
+# ==============================================================================
+# 4. GERENCIAMENTO DE SESSÃO E AUTENTICAÇÃO
+# ==============================================================================
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+if "user" not in st.session_state:
+    st.session_state["user"] = ""
+if "perfil" not in st.session_state:
+    st.session_state["perfil"] = ""
+if "cliente_vinculado" not in st.session_state:
+    st.session_state["cliente_vinculado"] = ""
+if "modulos_permitidos" not in st.session_state:
+    st.session_state["modulos_permitidos"] = []
+
+def verificar_credenciais(u_input, s_input):
+    if u_input in usuarios and usuarios[u_input]["senha"] == s_input:
+        st.session_state["logged_in"] = True
+        st.session_state["user"] = u_input
+        user_perfil = usuarios[u_input].get("perfil", "cliente")
+        st.session_state["perfil"] = user_perfil
+        st.session_state["cliente_vinculado"] = usuarios[u_input].get("cliente_vinculado", "")
+        
+        # Define os módulos permitidos com base na configuração do usuário ou perfil padrão
+        mod_user = usuarios[u_input].get("modulos_permitidos")
+        if mod_user is not None and isinstance(mod_user, list) and len(mod_user) > 0:
+            st.session_state["modulos_permitidos"] = mod_user
+        else:
+            st.session_state["modulos_permitidos"] = permissoes_perfis.get(user_perfil, ["🎫 Chamados Técnicos"])
+            
+        return True
+    return False
+
+def tela_login():
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.title("⚡ Eli Sistemas - Gestão & Inspeção")
+        st.subheader("Acesso ao Sistema")
+        
+        with st.form("form_login_principal"):
+            u_input = st.text_input("Usuário")
+            s_input = st.text_input("Senha", type="password")
+            btn_login = st.form_submit_button("Entrar", type="primary")
+            
+            if btn_login:
+                if verificar_credenciais(u_input, s_input):
+                    st.success("Login efetuado com sucesso!")
+                    st.rerun()
+                else:
+                    st.error("Usuário ou senha incorretos.")
+
+if not st.session_state["logged_in"]:
+    tela_login()
+    st.stop()
+
+# ==============================================================================
+# 5. GERADORES DE RELATÓRIOS PDF (REPORTLAB)
+# ==============================================================================
+def gerar_pdf_vencimentos(vencimentos_data):
+    """Atribuição: Gerar o documento PDF da tabela de controle de vencimentos para impressão."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+    story = []
+    styles = getSampleStyleSheet()
+
+    style_title = ParagraphStyle('TitlePDF', parent=styles['Normal'], fontSize=12, leading=14, fontName='Helvetica-Bold', textColor=colors.navy)
+    style_sub = ParagraphStyle('SubPDF', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.dimgrey)
+    style_cel = ParagraphStyle('CelTab', parent=styles['Normal'], fontSize=7, leading=8)
+    style_cel_bold = ParagraphStyle('CelTabBold', parent=styles['Normal'], fontSize=7, leading=8, fontName='Helvetica-Bold')
+
+    story.append(Paragraph(f"<b>{empresa_db.get('nome', 'ELI SISTEMAS')}</b>", style_title))
+    story.append(Paragraph(f"CNPJ: {empresa_db.get('cnpj', '')} | Tel: {empresa_db.get('telefone', '')} | E-mail: {empresa_db.get('email', '')}", style_sub))
+    story.append(Paragraph(f"<b>RELATÓRIO DE CONTROLE DE VENCIMENTOS & PREVENTIVAS</b> - Emitido em: {datetime.now().strftime('%d/%m/%Y')}", style_sub))
+    story.append(Spacer(1, 10))
+
+    cabecalho = [
+        Paragraph("<b>Cliente</b>", style_cel_bold),
+        Paragraph("<b>Detecção</b>", style_cel_bold),
+        Paragraph("<b>Extintores</b>", style_cel_bold),
+        Paragraph("<b>Mangueiras</b>", style_cel_bold),
+        Paragraph("<b>AVCB</b>", style_cel_bold),
+        Paragraph("<b>Observação</b>", style_cel_bold)
+    ]
+    
+    tabela_pdf = [cabecalho]
+
+    for cli, d in vencimentos_data.items():
+        st_det, _ = calcular_status_vencimento(d.get("deteccao", ""))
+        st_ext, _ = calcular_status_vencimento(d.get("extintores", ""))
+        st_man, _ = calcular_status_vencimento(d.get("mangueiras", ""))
+        st_avcb, _ = calcular_status_vencimento(d.get("avcb", ""))
+
+        tabela_pdf.append([
+            Paragraph(f"<b>{cli}</b>", style_cel),
+            Paragraph(f"{d.get('deteccao', 'N/A')}<br/>{st_det}", style_cel),
+            Paragraph(f"{d.get('extintores', 'N/A')}<br/>{st_ext}", style_cel),
+            Paragraph(f"{d.get('mangueiras', 'N/A')}<br/>{st_man}", style_cel),
+            Paragraph(f"{d.get('avcb', 'N/A')}<br/>{st_avcb}", style_cel),
+            Paragraph(d.get("obs", ""), style_cel)
+        ])
+
+    t_venc = Table(tabela_pdf, colWidths=[110, 80, 80, 80, 80, 125])
+    t_venc.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke),
+        ('BOX', (0,0), (-1,-1), 0.5, colors.grey),
+        ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE')
     ]))
-    
-    story.append(KeepTogether([t_ass]))
-    
+
+    story.append(t_venc)
     doc.build(story)
     buffer.seek(0)
-    return buffer
+    return buffer.getvalue()
 
-# ==========================================
-# 5. PAINÉIS DE CONTEÚDO DA APLICAÇÃO
-# ==========================================
-
-def render_painel_usuarios():
-    """Painel de administração para cadastrar e listar usuários (RBAC)."""
-    st.header("👥 Gerenciamento de Usuários e Permissões")
+def gerar_pdf_preventiva():
+    """Atribuição: Compilar dados técnicos e fotos da vistoria em PDF formatado conforme NBRs."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+    story = []
+    styles = getSampleStyleSheet()
     
-    if st.session_state["usuario_logado"]["perfil"] != "Admin":
-        st.error("⚠️ Acesso restrito apenas a usuários com perfil 'Admin'.")
-        return
+    style_celula = ParagraphStyle('CelTabela', parent=styles['Normal'], fontSize=8, leading=9, textColor=colors.black)
+    style_celula_bold = ParagraphStyle('CelTabelaBold', parent=styles['Normal'], fontSize=8, leading=9, fontName='Helvetica-Bold', textColor=colors.black)
+    style_texto_empresa = ParagraphStyle('EmpresaText', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.black)
+    style_sec_header = ParagraphStyle('SecHeader', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.navy)
+    style_center = ParagraphStyle('CenterText', parent=styles['Normal'], fontSize=8, leading=10, alignment=1, textColor=colors.black)
 
-    tab1, tab2 = st.tabs(["➕ Cadastrar Novo Usuário", "📋 Usuários Cadastrados"])
+    img_logo = Image(LOGO_PATH, width=50, height=35) if os.path.exists(LOGO_PATH) else Paragraph("<b>ELI SISTEMAS</b>", style_celula)
 
-    with tab1:
-        with st.form("form_novo_usuario"):
-            novo_user = st.text_input("Nome de Usuário (login)")
-            novo_nome = st.text_input("Nome Completo")
-            nova_senha = st.text_input("Senha", type="password")
-            novo_perfil = st.selectbox("Perfil de Acesso", ["Admin", "Tecnico", "Consulta"])
-            btn_cadastrar = st.form_submit_button("Cadastrar Usuário")
-
-            if btn_cadastrar:
-                if not novo_user or not novo_nome or not nova_senha:
-                    st.warning("Preencha todos os campos obrigatórios.")
-                else:
-                    sucesso, msg = cadastrar_usuario(novo_user, novo_nome, nova_senha, novo_perfil)
-                    if sucesso:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
-
-    with tab2:
-        conn = sqlite3.connect(DB_PATH)
-        df_users = pd.read_sql_query("SELECT id, username, nome, perfil FROM usuarios", conn)
-        conn.close()
-        st.dataframe(df_users, use_container_width=True)
-
-def render_painel_relatorios():
-    """Geração e exportação de relatórios em PDF."""
-    st.header("📄 Emissão de Relatórios Técnicos")
+    info_empresa_texto = f"""
+    <b>{empresa_db.get('nome', '')}</b><br/>
+    CNPJ: {empresa_db.get('cnpj', '')} | CREA: {empresa_db.get('crea', '')} | Tel: {empresa_db.get('telefone', '')}<br/>
+    E-mail: {empresa_db.get('email', '')} | Endereço: {empresa_db.get('endereco', '')}<br/>
+    <b>RELATÓRIO DE INSPEÇÃO PREVENTIVA & MANUTENÇÃO NORMADA</b>
+    """
     
-    titulo = st.text_input("Título do Relatório", "Relatório de Vistoria de Segurança")
-    obs = st.text_area("Observações Adicionais", "Instalação em conformidade com as normas técnicas vigentes.")
-    
-    # Exemplo de dados para tabela
-    st.subheader("Itens da Vistoria")
-    dados_exemplo = [
-        ["Item", "Descrição", "Status"],
-        ["01", "Central de Alarme de Incêndio", "Aprovado"],
-        ["02", "Sinalização Fotoluminescente", "Aprovado"],
-        ["03", "Iluminação de Emergência", "Pendente"],
+    tabela_cabecalho = Table([[Paragraph(info_empresa_texto, style_texto_empresa), img_logo]], colWidths=[485, 70])
+    story.append(tabela_cabecalho)
+    story.append(Spacer(1, 6))
+
+    story.append(Paragraph("<b>1. DADOS DA EDIFICAÇÃO E IDENTIFICAÇÃO DA VISITA TÉCNICA</b>", style_sec_header))
+    dados_edif = [
+        [Paragraph(f"<b>CLIENTE:</b> {st.session_state.get('cliente', '')}", style_celula), Paragraph(f"<b>Data da Visita:</b> {st.session_state.get('data_visita', '')}", style_celula)],
+        [Paragraph(f"<b>CNPJ:</b> {st.session_state.get('cnpj', '')}", style_celula), Paragraph(f"<b>Tipo de Visita:</b> {st.session_state.get('tipo_visita', 'Preventiva Trimestral')}", style_celula)],
+        [Paragraph(f"<b>Endereço:</b> {st.session_state.get('endereco', '')}", style_celula), Paragraph(f"<b>Responsável Técnico:</b> {st.session_state.get('resp_tecnico', '')}", style_celula)]
     ]
-    st.table(dados_exemplo)
-    
-    if st.button("🔴 Gerar PDF"):
-        pdf_bytes = gerar_pdf_relatorio(titulo, dados_exemplo, obs)
-        st.download_button(
-            label="💾 Baixar PDF Gerado",
-            data=pdf_bytes,
-            file_name=f"relatorio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-            mime="application/pdf"
-        )
+    t_edif = Table(dados_edif, colWidths=[330, 225])
+    t_edif.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey)]))
+    story.append(t_edif)
+    story.append(Spacer(1, 6))
 
-def render_painel_backup():
-    """Gerenciamento de backups do sistema."""
-    st.header("💾 Backup e Restauração de Dados")
-    
-    if st.session_state["usuario_logado"]["perfil"] != "Admin":
-        st.warning("Apenas administradores podem fazer operações de restauração.")
-    
-    st.subheader("Exportar Backup")
-    if st.button("Criar Arquivo de Backup (.zip)"):
-        buffer = BytesIO()
-        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            if os.path.exists(DB_PATH):
-                zip_file.write(DB_PATH)
-            if os.path.exists(JSON_STATE_PATH):
-                zip_file.write(JSON_STATE_PATH)
+    story.append(Paragraph("<b>2. CARACTERIZAÇÃO TÉCNICA DO SISTEMA</b>", style_sec_header))
+    dados_tec = [
+        [Paragraph(f"<b>Central:</b> {st.session_state.get('central_sdai', '')}", style_celula), Paragraph(f"<b>Tipo:</b> {st.session_state.get('tipo_central', '')}", style_celula), Paragraph(f"<b>Qtd. Laços:</b> {st.session_state.get('qtd_lacos', '')}", style_celula)],
+        [Paragraph(f"<b>Detectores:</b> {st.session_state.get('det_fumaca', '')}", style_celula), Paragraph(f"<b>Acionadores:</b> {st.session_state.get('acionadores', '')}", style_celula), Paragraph(f"<b>Avisadores:</b> {st.session_state.get('avisadores', '')}", style_celula)],
+        [Paragraph(f"<b>Pressurização:</b> {st.session_state.get('pressurizacao', '')}", style_celula), Paragraph(f"<b>Tensão Baterias:</b> {st.session_state.get('tensao_baterias', '')}", style_celula), Paragraph(f"<b>Status Geral:</b> {st.session_state.get('status_geral', '')}", style_celula_bold)]
+    ]
+    t_tec = Table(dados_tec, colWidths=[185, 185, 185])
+    t_tec.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey)]))
+    story.append(t_tec)
+    story.append(Spacer(1, 8))
+
+    titulos_secoes = {
+        "sec3": "3. INSPEÇÃO E TESTES FUNCIONAIS DA CENTRAL / FONTE AUXILIAR",
+        "sec4": "4. INFRAESTRUTURA E LAÇOS DE COMUNICAÇÃO (SDAI)",
+        "sec5": "5. DISPOSITIVOS DE CAMPO E TESTES AMOSTRAIS",
+        "sec6": "6. AUTOMAÇÕES, SINAIS DE INTERTRAVAMENTO E SEGURANÇA"
+    }
+
+    for sec_key, titulo_sec in titulos_secoes.items():
+        story.append(Paragraph(f"<b>{titulo_sec}</b>", style_sec_header))
+        tabela_dados = [[Paragraph("<b>Item / Descrição Normativa</b>", style_celula_bold), Paragraph("<b>Status</b>", style_celula_bold), Paragraph("<b>Medição</b>", style_celula_bold), Paragraph("<b>Observação</b>", style_celula_bold)]]
         
-        buffer.seek(0)
-        st.download_button(
-            label="Baixar Backup",
-            data=buffer,
-            file_name=f"backup_sistema_{datetime.now().strftime('%Y%m%d')}.zip",
-            mime="application/zip"
-        )
+        for idx, (item_nome, norma_ref) in enumerate(ITENS_SECOES[sec_key]):
+            st_val = st.session_state.get(f"{sec_key}_{idx}_status", "CONFORME")
+            med_val = st.session_state.get(f"{sec_key}_{idx}_val", "")
+            obs_val = st.session_state.get(f"{sec_key}_{idx}_obs", "")
+            
+            p_item = Paragraph(f"<b>{item_nome}</b><br/><font size=6 color=grey>{norma_ref}</font>", style_celula)
+            p_st = Paragraph(f"<b>{st_val}</b>", style_celula)
+            p_med = Paragraph(med_val, style_celula)
+            p_obs = Paragraph(obs_val, style_celula)
+            
+            tabela_dados.append([p_item, p_st, p_med, p_obs])
+            
+        t_sec = Table(tabela_dados, colWidths=[240, 75, 80, 160])
+        t_sec.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke),
+            ('BOX', (0,0), (-1,-1), 0.5, colors.grey),
+            ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE')
+        ]))
+        story.append(t_sec)
+        story.append(Spacer(1, 6))
+
+    fotos_info = st.session_state.get("fotos_detalhes", [])
+    if fotos_info:
+        story.append(Paragraph("<b>7. REGISTRO FOTOGRÁFICO DA INSPEÇÃO</b>", style_sec_header))
+        fotos_rows = []
+        row_atual = []
+        for f_item in fotos_info:
+            caminho_foto = f_item.get("caminho", "")
+            obs_foto = f_item.get("obs", "")
+            if os.path.exists(caminho_foto):
+                img = Image(caminho_foto, width=160, height=110)
+                caption_p = Paragraph(f"<font size=7><b>{obs_foto}</b></font>", style_center)
+                cell_box = Table([[img], [caption_p]], colWidths=[165])
+                cell_box.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER')]))
+                row_atual.append(cell_box)
+                if len(row_atual) == 3:
+                    fotos_rows.append(row_atual)
+                    row_atual = []
+        if row_atual:
+            while len(row_atual) < 3:
+                row_atual.append(Paragraph("", style_celula))
+            fotos_rows.append(row_atual)
+            
+        if fotos_rows:
+            t_fotos = Table(fotos_rows, colWidths=[185, 185, 185])
+            t_fotos.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('VALIGN', (0,0), (-1,-1), 'TOP')]))
+            story.append(t_fotos)
+            story.append(Spacer(1, 6))
+
+    story.append(Paragraph("<b>8. PARECER TÉCNICO E RECOMENDAÇÕES CORRETIVAS</b>", style_sec_header))
+    parecer_txt = st.session_state.get("parecer", "Sem observações adicionais.")
+    orientacoes_txt = st.session_state.get("orientacoes", "Manter a periodicidade das inspeções preventivas conforme normas NBR 17240 / IT 19.")
+    
+    dados_obs = [
+        [Paragraph(f"<b>Parecer Técnico Geral:</b><br/>{parecer_txt}", style_celula)],
+        [Paragraph(f"<b>Recomendações e Ações Corretivas:</b><br/>{orientacoes_txt}", style_celula)]
+    ]
+    t_obs = Table(dados_obs, colWidths=[555])
+    t_obs.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey)]))
+    story.append(t_obs)
+    story.append(Spacer(1, 15))
+
+    story.append(Paragraph("<b>9. VALIDAÇÃO E ASSINATURAS DAS PARTES</b>", style_sec_header))
+    story.append(Spacer(1, 20))
+    
+    nome_tecnico = st.session_state.get('resp_tecnico', empresa_db.get("resp_tecnico", "Eli Silva"))
+    crea_tecnico = empresa_db.get("crea", "")
+    razao_social_cliente = st.session_state.get('cliente', '')
+    cnpj_cliente = st.session_state.get('cnpj', '')
+
+    assinaturas_data = [
+        [
+            Paragraph("__________________________________________<br/><b>RESPONSÁVEL TÉCNICO</b><br/>" + f"{nome_tecnico}<br/>CREA: {crea_tecnico}", style_center),
+            Paragraph("__________________________________________<br/><b>REPRESENTANTE / CLIENTE</b><br/>" + f"{razao_social_cliente}<br/>CNPJ: {cnpj_cliente}", style_center)
+        ]
+    ]
+    t_ass = Table(assinaturas_data, colWidths=[277, 277])
+    t_ass.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('VALIGN', (0,0), (-1,-1), 'MIDDLE')]))
+    
+    story.append(KeepTogether(t_ass))
+
+    doc.build(story)
+    buffer.seek(0)
+    pdf_data = buffer.getvalue()
+
+    nome_cliente_atual = st.session_state.get('cliente', '').strip()
+    if nome_cliente_atual:
+        registrar_historico_cliente(nome_cliente_atual, f"Relatório de Vistoria ({st.session_state.get('tipo_visita', 'Preventiva Trimestral')})", {
+            "status_geral": st.session_state.get('status_geral', 'CONFORME'),
+            "resp_tecnico": st.session_state.get('resp_tecnico', empresa_db.get("resp_tecnico", "Eli Silva"))
+        })
+
+    return pdf_data
+
+def inicializar_defaults():
+    defaults = {
+        "cliente": "", "cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP",
+        "sindico": "", "zelador": "", "contato": "", "email": "",
+        "data_visita": datetime.now().strftime("%Y-%m-%d"), "tipo_visita": "Preventiva Trimestral",
+        "resp_tecnico": empresa_db.get("resp_tecnico", "Eli Silva"), "acompanhante": "",
+        "status_geral": "CONFORME / SISTEMA OPERACIONAL", "central_sdai": "",
+        "tipo_central": "SISTEMA ENDEREÇÁVEL", "qtd_lacos": "", "det_fumaca": "",
+        "acionadores": "", "avisadores": "", "pressurizacao": "Sim",
+        "tensao_baterias": "24 Vcc", "parecer": "", "orientacoes": "", "fotos_detalhes": []
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+    for sec_key in ITENS_SECOES:
+        for idx, _ in enumerate(ITENS_SECOES[sec_key]):
+            if f"{sec_key}_{idx}_val" not in st.session_state:
+                st.session_state[f"{sec_key}_{idx}_val"] = ""
+            if f"{sec_key}_{idx}_obs" not in st.session_state:
+                st.session_state[f"{sec_key}_{idx}_obs"] = ""
+            if f"{sec_key}_{idx}_status" not in st.session_state:
+                st.session_state[f"{sec_key}_{idx}_status"] = "CONFORME"
+
+inicializar_defaults()
+
+# ==============================================================================
+# 6. NAVEGAÇÃO E INTERFACE LATERAL COM FILTRO RBAC
+# ==============================================================================
+with st.sidebar:
+    st.title("⚡ Eli Sistemas")
+    st.write(f"👤 Usuário: **{st.session_state['user']}** ({st.session_state['perfil'].upper()})")
+    
+    if st.button("🚪 Sair / Logout", type="primary"):
+        st.session_state["logged_in"] = False
+        st.session_state["user"] = ""
+        st.session_state["perfil"] = ""
+        st.session_state["cliente_vinculado"] = ""
+        st.session_state["modulos_permitidos"] = []
+        st.rerun()
         
     st.divider()
+
+    # Filtra as opções do menu conforme permissão do usuário
+    if st.session_state["perfil"] == "master":
+        opcoes_menu = TODOS_MODULOS
+    else:
+        opcoes_menu = st.session_state.get("modulos_permitidos", ["🎫 Chamados Técnicos"])
+        if not opcoes_menu:
+            opcoes_menu = ["🎫 Chamados Técnicos"]
+        
+    menu = st.radio("Navegação Principal", opcoes_menu)
+
+# ==============================================================================
+# 7. ROTINAS DE PÁGINAS DO MENU
+# ==============================================================================
+
+if menu == "📋 Nova Vistoria / Laudo":
+    st.header("📋 Emissão de Relatório / Vistoria Preventiva")
     
-    st.subheader("Restaurar Backup")
-    uploaded_file = st.file_uploader("Envie o arquivo .zip de backup", type=["zip"])
-    if uploaded_file and st.button("Restaurar Sistema"):
-        sucesso, msg = restaurar_backup_completo(uploaded_file)
-        if sucesso:
-            st.success(msg)
+    if clientes_db:
+        clientes_ativos = {k: v for k, v in clientes_db.items() if v.get("ativo", True)}
+        lista_cli = ["-- Selecionar Cliente Cadastrado --"] + sorted(list(clientes_ativos.keys()))
+        cli_sel = st.selectbox("Carregar Dados de Cliente Existente", lista_cli)
+        if cli_sel != "-- Selecionar Cliente Cadastrado --":
+            info_c = clientes_ativos[cli_sel]
+            st.session_state["cliente"] = cli_sel
+            st.session_state["cnpj"] = info_c.get("cnpj", "")
+            st.session_state["endereco"] = info_c.get("endereco", "")
+
+    st.subheader("1. Dados Gerais da Edificação")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.session_state["cliente"] = st.text_input("Cliente / Condomínio", value=st.session_state["cliente"])
+        st.session_state["cnpj"] = st.text_input("CNPJ", value=st.session_state["cnpj"])
+        st.session_state["sindico"] = st.text_input("Síndico(a)", value=st.session_state["sindico"])
+        st.session_state["contato"] = st.text_input("Contato / Telefone", value=st.session_state["contato"])
+    with col2:
+        st.session_state["endereco"] = st.text_input("Endereço", value=st.session_state["endereco"])
+        st.session_state["data_visita"] = st.date_input("Data da Visita", datetime.strptime(st.session_state["data_visita"], "%Y-%m-%d") if isinstance(st.session_state["data_visita"], str) else datetime.now()).strftime("%Y-%m-%d")
+        
+        opcoes_visita = [
+            "Preventiva Mensal", 
+            "Preventiva Trimestral", 
+            "Preventiva Semestral", 
+            "Preventiva Anual", 
+            "Corretiva / Chamado Técnico", 
+            "Vistoria Inicial / Diagnóstico",
+            "Outro"
+        ]
+        
+        pos_index = 1
+        if st.session_state["tipo_visita"] in opcoes_visita:
+            pos_index = opcoes_visita.index(st.session_state["tipo_visita"])
         else:
-            st.error(msg)
-
-# ==========================================
-# 6. FLUXO PRINCIPAL DA APLICAÇÃO
-# ==========================================
-
-def main():
-    # 1. Verifica autenticação de usuário (Bloqueia o app caso deslogado)
-    if not render_login():
-        st.stop()
-
-    # 2. Navegação Lateral
-    st.sidebar.title("📌 Navegação")
-    menu_opcoes = ["Dashboard", "Relatórios PDF", "Gerenciar Usuários", "Backup & Sistema"]
-    escolha = st.sidebar.radio("Selecione o Módulo", menu_opcoes)
-
-    # 3. Roteamento de telas
-    if escolha == "Dashboard":
-        st.title("🛡️ Painel Principal")
-        st.write(f"Olá, **{st.session_state['usuario_logado']['nome']}**! Selecione uma opção no menu à esquerda.")
+            pos_index = 6
+            
+        tipo_sel = st.selectbox("Tipo de Visita Técnica", opcoes_visita, index=pos_index)
         
-        # Exemplo de Cards rápidos
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Status do Sistema", "Operacional", "100%")
-        col2.metric("Perfil de Acesso", st.session_state['usuario_logado']['perfil'])
-        col3.metric("Banco de Dados", "SQLite Activo")
-        
-    elif escolha == "Relatórios PDF":
-        render_painel_relatorios()
-        
-    elif escolha == "Gerenciar Usuários":
-        render_painel_usuarios()
-        
-    elif escolha == "Backup & Sistema":
-        render_painel_backup()
+        if tipo_sel == "Outro":
+            st.session_state["tipo_visita"] = st.text_input("Especifique o Tipo de Visita", value=st.session_state.get("tipo_visita_custom", ""))
+            st.session_state["tipo_visita_custom"] = st.session_state["tipo_visita"]
+        else:
+            st.session_state["tipo_visita"] = tipo_sel
+            
+        st.session_state["zelador"] = st.text_input("Zelador / Resp. Local", value=st.session_state["zelador"])
+        st.session_state["email"] = st.text_input("E-mail do Cliente", value=st.session_state["email"])
 
-if __name__ == "__main__":
-    main()
+    st.subheader("2. Caracterização Técnica e Equipamentos Instalados")
+    col2_1, col2_2, col2_3 = st.columns(3)
+    with col2_1:
+        st.session_state["central_sdai"] = st.text_input("Marca / Modelo da Central", value=st.session_state["central_sdai"])
+        st.session_state["det_fumaca"] = st.text_input("Qtd. Detectores (Fumaça/Térmico)", value=st.session_state["det_fumaca"])
+        st.session_state["tensao_baterias"] = st.text_input("Tensão Baterias (Vcc)", value=st.session_state["tensao_baterias"])
+    with col2_2:
+        st.session_state["tipo_central"] = st.selectbox("Tipo de Sistema", ["SISTEMA ENDEREÇÁVEL", "SISTEMA CONVENCIONAL"], index=0 if st.session_state["tipo_central"] == "SISTEMA ENDEREÇÁVEL" else 1)
+        st.session_state["acionadores"] = st.text_input("Qtd. Acionadores Manuais", value=st.session_state["acionadores"])
+        st.session_state["pressurizacao"] = st.selectbox("Possui Pressurização de Escada?", ["Sim", "Não", "Não Aplicável"], index=0)
+    with col2_3:
+        st.session_state["qtd_lacos"] = st.text_input("Quantidade de Laços / Zonas", value=st.session_state["qtd_lacos"])
+        st.session_state["avisadores"] = st.text_input("Qtd. Avisadores Sonoros/Visuais", value=st.session_state["avisadores"])
+        st.session_state["status_geral"] = st.selectbox("Status Geral da Vistoria", ["CONFORME / SISTEMA OPERACIONAL", "SISTEMA COM ANOMALIAS / NECESSITA REPAROS", "CRÍTICO / OPERAÇÃO PARCIAL"], index=0)
+
+    titulos_secoes = {
+        "sec3": "3. Inspeção e Testes Funcionais da Central / Fonte Auxiliar",
+        "sec4": "4. Infraestrutura e Laços de Comunicação (SDAI)",
+        "sec5": "5. Dispositivos de Campo e Testes Amostrais",
+        "sec6": "6. Automações, Sinais de Intertravamento e Segurança"
+    }
+
+    for sec_key, titulo_sec in titulos_secoes.items():
+        st.subheader(titulo_sec)
+        for idx, (item_nome, norma_ref) in enumerate(ITENS_SECOES[sec_key]):
+            c_a, c_b, c_c, c_d = st.columns([2.5, 1.5, 1.5, 2.5])
+            with c_a:
+                st.caption(f"**{item_nome}**\n*{norma_ref}*")
+            with c_b:
+                st.session_state[f"{sec_key}_{idx}_status"] = st.selectbox(f"Status", ["CONFORME", "NÃO CONFORME", "NÃO APLICÁVEL"], key=f"st_{sec_key}_{idx}", label_visibility="collapsed")
+            with c_c:
+                st.session_state[f"{sec_key}_{idx}_val"] = st.text_input("Medição/Valor", value=st.session_state[f"{sec_key}_{idx}_val"], key=f"vl_{sec_key}_{idx}", placeholder="Ex: 27.2V", label_visibility="collapsed")
+            with c_d:
+                st.session_state[f"{sec_key}_{idx}_obs"] = st.text_input("Observação", value=st.session_state[f"{sec_key}_{idx}_obs"], key=f"ob_{sec_key}_{idx}", placeholder="Detalhes", label_visibility="collapsed")
+
+    st.subheader("7. Registro Fotográfico da Inspeção")
+    uploaded_files = st.file_uploader("Carregar Fotos da Vistoria", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+    
+    if uploaded_files:
+        fotos_processadas = set()
+        novas_fotos_list = []
+        for idx_f, file in enumerate(uploaded_files):
+            file_bytes = file.getvalue()
+            file_hash = hashlib.md5(file_bytes).hexdigest()
+            if file_hash not in fotos_processadas:
+                fotos_processadas.add(file_hash)
+                nome_foto = f"{file_hash}_{file.name}"
+                caminho_foto = os.path.join(PASTA_FOTOS_VISTORIA, nome_foto)
+                with open(caminho_foto, "wb") as f_img:
+                    f_img.write(file_bytes)
+                
+                col_f1, col_f2 = st.columns([1, 3])
+                with col_f1:
+                    st.image(caminho_foto, width=120)
+                with col_f2:
+                    obs_f = st.text_input(f"Legenda/Descrição da Foto #{idx_f+1}", value=f"Foto {idx_f+1} - Inspeção", key=f"legenda_foto_{file_hash}")
+                
+                novas_fotos_list.append({"caminho": caminho_foto, "obs": obs_f})
+                
+        st.session_state["fotos_detalhes"] = novas_fotos_list
+
+    st.subheader("8. Parecer Técnico e Recomendações")
+    st.session_state["parecer"] = st.text_area("Parecer Técnico Geral", value=st.session_state["parecer"], height=100)
+    st.session_state["orientacoes"] = st.text_area("Recomendações e Ações Corretivas", value=st.session_state["orientacoes"], height=100)
+
+    st.subheader("9. Identificação para Assinaturas")
+    col_a1, col_a2 = st.columns(2)
+    with col_a1:
+        st.session_state["resp_tecnico"] = st.text_input("Responsável Técnico (Nome)", value=st.session_state["resp_tecnico"])
+    with col_a2:
+        st.info("ℹ️ No PDF, a assinatura do cliente será gerada automaticamente com a Razão Social e o CNPJ informados no formulário.")
+
+    st.divider()
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("💾 Salvar Rascunho Completo", type="secondary"):
+            if st.session_state["cliente"]:
+                estado_completo = {k: v for k, v in st.session_state.items() if k not in ["logged_in", "user", "perfil"]}
+                conn = sqlite3.connect(DB_FILE)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO rascunhos (cliente, data_visita, dados_json, atualizado_em) VALUES (?, ?, ?, ?)",
+                    (st.session_state["cliente"], st.session_state["data_visita"], json.dumps(estado_completo), datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                )
+                conn.commit()
+                conn.close()
+                st.success("Rascunho completo salvo com sucesso!")
+            else:
+                st.error("Informe o nome do cliente para salvar o rascunho.")
+
+    with col_btn2:
+        if st.button("📄 Gerar e Salvar PDF do Relatório", type="primary"):
+            pdf_bytes = gerar_pdf_preventiva()
+            st.success("Relatório gerado com fotos e campo de assinaturas!")
+            st.download_button("💾 Baixar Relatório PDF Completo", pdf_bytes, file_name=f"Vistoria_{st.session_state['cliente']}.pdf", mime="application/pdf")
+
+elif menu == "📂 Rascunhos de Vistoria":
+    st.header("📂 Rascunhos de Vistoria")
+    
+    conn = sqlite3.connect(DB_FILE)
+    df_rascunhos = pd.read_sql_query("SELECT id, cliente AS Cliente, data_visita AS 'Data Visita', atualizado_em AS 'Atualizado Em' FROM rascunhos ORDER BY id DESC", conn)
+    conn.close()
+    
+    if not df_rascunhos.empty:
+        st.dataframe(df_rascunhos, use_container_width=True)
+        col_r1, col_r2, col_r3 = st.columns(3)
+        with col_r1:
+            id_rascunho = st.number_input("ID do Rascunho", min_value=1, step=1)
+        with col_r2:
+            if st.button("📥 Carregar / Restaurar Rascunho", type="primary"):
+                conn = sqlite3.connect(DB_FILE)
+                cursor = conn.cursor()
+                cursor.execute("SELECT dados_json FROM rascunhos WHERE id = ?", (id_rascunho,))
+                row = cursor.fetchone()
+                conn.close()
+                if row:
+                    dados_recuperados = json.loads(row[0])
+                    for key_r, val_r in dados_recuperados.items():
+                        st.session_state[key_r] = val_r
+                    st.success(f"Rascunho #{id_rascunho} carregado no formulário! Vá até a aba 'Nova Vistoria' para continuar.")
+                else:
+                    st.error("ID de rascunho não encontrado.")
+        with col_r3:
+            if st.button("🗑️ Excluir Rascunho"):
+                conn = sqlite3.connect(DB_FILE)
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM rascunhos WHERE id = ?", (id_rascunho,))
+                conn.commit()
+                conn.close()
+                st.success(f"Rascunho #{id_rascunho} excluído!")
+                st.rerun()
+    else:
+        st.info("Nenhum rascunho pendente registrado.")
+
+elif menu == "📊 Controle de Vencimentos":
+    st.header("📊 Controle de Vencimentos & Oportunidades de Orçamento")
+    st.info("💡 **Aviso Automático de 30 Dias:** As células ganham destaque em amarelo quando estiverem a 1 mês do vencimento (ideal para ligar e ofertar orçamento) e em vermelho caso já estejam vencidas.")
+
+    total_vencidos = 0
+    total_alerta = 0
+
+    for cli, dados in vencimentos_db.items():
+        for item_k in ["deteccao", "extintores", "mangueiras", "avcb"]:
+            data_val = dados.get(item_k, "")
+            if data_val:
+                st_txt, _ = calcular_status_vencimento(data_val)
+                if "VENCIDO" in st_txt:
+                    total_vencidos += 1
+                elif "VENCE EM BREVE" in st_txt:
+                    total_alerta += 1
+
+    col_st1, col_st2, col_st3 = st.columns(3)
+    col_st1.metric("🔴 Vencidos (Urgente)", total_vencidos)
+    col_st2.metric("🟡 Vencem em até 30 Dias (Ligar)", total_alerta)
+    col_st3.metric("🏢 Clientes Cadastrados no Controle", len(vencimentos_db))
+
+    st.divider()
+
+    tab_v1, tab_v2 = st.tabs(["📋 Planilha Geral de Vencimentos", "✏️ Atualizar / Cadastrar Datas"])
+
+    with tab_v2:
+        st.subheader("Atualizar Vencimentos do Cliente")
+        clientes_ativos_v = sorted(list(clientes_db.keys())) if clientes_db else []
+        
+        col_cv1, col_cv2 = st.columns([2, 1])
+        with col_cv1:
+            cli_venc_sel = st.selectbox("Selecione o Cliente / Condomínio", ["-- Novo / Outro --"] + clientes_ativos_v)
+            if cli_venc_sel == "-- Novo / Outro --":
+                nome_cliente_venc = st.text_input("Nome do Cliente")
+            else:
+                nome_cliente_venc = cli_venc_sel
+
+        dados_existentes = vencimentos_db.get(nome_cliente_venc, {}) if nome_cliente_venc else {}
+
+        with st.form("form_vencimentos"):
+            st.caption("Deixe em branco ou selecione a data correspondente ao próximo vencimento do serviço:")
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                dt_det = st.date_input("Tipo Detecção", value=datetime.strptime(dados_existentes.get("deteccao"), "%Y-%m-%d") if dados_existentes.get("deteccao") else datetime.now())
+                chk_det = st.checkbox("Ativar Detecção", value=bool(dados_existentes.get("deteccao")))
+            with c2:
+                dt_ext = st.date_input("Extintores", value=datetime.strptime(dados_existentes.get("extintores"), "%Y-%m-%d") if dados_existentes.get("extintores") else datetime.now())
+                chk_ext = st.checkbox("Ativar Extintores", value=bool(dados_existentes.get("extintores")))
+            with c3:
+                dt_man = st.date_input("Mangueiras", value=datetime.strptime(dados_existentes.get("mangueiras"), "%Y-%m-%d") if dados_existentes.get("mangueiras") else datetime.now())
+                chk_man = st.checkbox("Ativar Mangueiras", value=bool(dados_existentes.get("mangueiras")))
+            with c4:
+                dt_avcb = st.date_input("AVCB", value=datetime.strptime(dados_existentes.get("avcb"), "%Y-%m-%d") if dados_existentes.get("avcb") else datetime.now())
+                chk_avcb = st.checkbox("Ativar AVCB", value=bool(dados_existentes.get("avcb")))
+
+            obs_venc = st.text_area("Observação / Anotações de Atendimento", value=dados_existentes.get("obs", ""))
+
+            if st.form_submit_button("💾 Salvar Controle de Vencimentos", type="primary"):
+                if nome_cliente_venc.strip():
+                    nome_key = nome_cliente_venc.strip().upper()
+                    vencimentos_db[nome_key] = {
+                        "deteccao": dt_det.strftime("%Y-%m-%d") if chk_det else "",
+                        "extintores": dt_ext.strftime("%Y-%m-%d") if chk_ext else "",
+                        "mangueiras": dt_man.strftime("%Y-%m-%d") if chk_man else "",
+                        "avcb": dt_avcb.strftime("%Y-%m-%d") if chk_avcb else "",
+                        "obs": obs_venc
+                    }
+                    salvar_json(VENCIMENTOS_FILE, vencimentos_db)
+                    st.success(f"Vencimentos de '{nome_key}' atualizados com sucesso!")
+                    st.rerun()
+                else:
+                    st.error("Informe o nome do cliente.")
+
+    with tab_v1:
+        if vencimentos_db:
+            lista_tabela = []
+            for cli, d in vencimentos_db.items():
+                st_det, _ = calcular_status_vencimento(d.get("deteccao", ""))
+                st_ext, _ = calcular_status_vencimento(d.get("extintores", ""))
+                st_man, _ = calcular_status_vencimento(d.get("mangueiras", ""))
+                st_avcb, _ = calcular_status_vencimento(d.get("avcb", ""))
+
+                lista_tabela.append({
+                    "Cliente": cli,
+                    "Tipo Detecção": f"{d.get('deteccao', 'N/A')} ({st_det})",
+                    "Extintores": f"{d.get('extintores', 'N/A')} ({st_ext})",
+                    "Mangueiras": f"{d.get('mangueiras', 'N/A')} ({st_man})",
+                    "AVCB": f"{d.get('avcb', 'N/A')} ({st_avcb})",
+                    "Observação": d.get("obs", "")
+                })
+
+            df_venc = pd.DataFrame(lista_tabela)
+            st.dataframe(df_venc, use_container_width=True, height=350)
+
+            col_pdf1, col_pdf2 = st.columns([3, 1])
+            with col_pdf2:
+                pdf_venc_bytes = gerar_pdf_vencimentos(vencimentos_db)
+                st.download_button(
+                    label="🖨️ Imprimir / Baixar Relatório PDF",
+                    data=pdf_venc_bytes,
+                    file_name=f"Relatorio_Vencimentos_{datetime.now().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf",
+                    type="primary"
+                )
+
+            with st.expander("🗑️ Excluir Cliente do Controle de Vencimentos"):
+                cli_del_v = st.selectbox("Selecione o Cliente para Remover", sorted(list(vencimentos_db.keys())))
+                if st.button("Remover Registro"):
+                    del vencimentos_db[cli_del_v]
+                    salvar_json(VENCIMENTOS_FILE, vencimentos_db)
+                    st.success("Registro removido com sucesso!")
+                    st.rerun()
+        else:
+            st.info("Nenhum vencimento cadastrado até o momento. Utilize a aba 'Atualizar / Cadastrar Datas' para iniciar.")
+
+elif menu == "📅 Agenda de Atividades":
+    st.header("📅 Agenda de Atividades & Manutenções")
+    
+    conn = sqlite3.connect(DB_FILE)
+    try:
+        df_agenda = pd.read_sql_query(
+            "SELECT id AS ID, task AS Tarefa, category AS Categoria, due_date AS 'Data Prevista', status AS Status FROM agenda ORDER BY due_date ASC", 
+            conn
+        )
+    except Exception:
+        df_agenda = pd.DataFrame(columns=["ID", "Tarefa", "Categoria", "Data Prevista", "Status"])
+    conn.close()
+
+    tab_a1, tab_a2 = st.tabs(["📆 Visualizar Calendário Mensal", "➕ Nova Atividade / Registro"])
+    
+    with tab_a2:
+        with st.form("form_nova_agenda"):
+            nova_tarefa = st.text_input("Descrição da Tarefa / Atividade / Cobrança")
+            categoria = st.selectbox("Categoria", ["Atividade Técnica", "Manutenção Preventiva", "Cobrança / Pagamento", "Diária"])
+            data_prev = st.date_input("Data Prevista", datetime.now())
+            status_inicial = st.selectbox("Status", ["Não realizado", "Realizado", "Pendente"])
+            
+            if st.form_submit_button("➕ Adicionar à Agenda", type="primary"):
+                if nova_tarefa.strip():
+                    conn = sqlite3.connect(DB_FILE)
+                    cursor = conn.cursor()
+                    cursor.execute("INSERT INTO agenda (task, category, due_date, status) VALUES (?, ?, ?, ?)",
+                                   (nova_tarefa, categoria, data_prev.strftime("%Y-%m-%d"), status_inicial))
+                    conn.commit()
+                    conn.close()
+                    st.success("Item adicionado à agenda!")
+                    st.rerun()
+                else:
+                    st.warning("Preencha a descrição da tarefa.")
+
+    with tab_a1:
+        col_m1, col_m2, col_m3 = st.columns([2, 2, 3])
+        with col_m1:
+            mes_sel = st.selectbox("Mês", list(range(1, 13)), index=datetime.now().month - 1)
+        with col_m2:
+            ano_sel = st.number_input("Ano", min_value=2024, max_value=2030, value=datetime.now().year)
+            
+        cal = calendar.monthcalendar(ano_sel, mes_sel)
+        dias_semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+        
+        st.markdown(f"### 🗓️ {calendar.month_name[mes_sel].capitalize()} de {ano_sel}")
+        
+        cols_header = st.columns(7)
+        for idx, dia_nome in enumerate(dias_semana):
+            cols_header[idx].markdown(f"**{dia_nome}**")
+
+        st.divider()
+
+        for semana in cal:
+            cols_dia = st.columns(7)
+            for idx_dia, dia_num in enumerate(semana):
+                with cols_dia[idx_dia]:
+                    if dia_num != 0:
+                        data_str = f"{ano_sel}-{mes_sel:02d}-{dia_num:02d}"
+                        e_hoje = (data_str == datetime.now().strftime("%Y-%m-%d"))
+                        label_dia = f"**{dia_num}** 📍" if e_hoje else f"**{dia_num}**"
+                        st.markdown(label_dia)
+
+                        if not df_agenda.empty:
+                            tarefas_dia = df_agenda[df_agenda["Data Prevista"] == data_str]
+                            for _, item in tarefas_dia.iterrows():
+                                cor_status = "🟢" if item["Status"] == "Realizado" else ("🔴" if item["Status"] == "Não realizado" else "🟡")
+                                st.caption(f"{cor_status} #{item['ID']} - {item['Tarefa']}")
+                        st.markdown("---")
+                    else:
+                        st.write("")
+
+        with st.expander("📋 Ver Lista Completa de Tarefas e Gerenciar Status"):
+            if not df_agenda.empty:
+                st.dataframe(df_agenda, use_container_width=True)
+                
+                col_ed1, col_ed2, col_ed3 = st.columns(3)
+                with col_ed1:
+                    id_agenda = st.number_input("ID do Item", min_value=1, step=1)
+                with col_ed2:
+                    novo_status = st.selectbox("Mudar Status Para", ["Realizado", "Não realizado", "Pendente"])
+                with col_ed3:
+                    if st.button("🔄 Atualizar Status"):
+                        conn = sqlite3.connect(DB_FILE)
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE agenda SET status = ? WHERE id = ?", (novo_status, id_agenda))
+                        conn.commit()
+                        conn.close()
+                        st.success(f"Status do ID #{id_agenda} atualizado!")
+                        st.rerun()
+
+                if st.button("🗑️ Excluir Item da Agenda"):
+                    conn = sqlite3.connect(DB_FILE)
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM agenda WHERE id = ?", (id_agenda,))
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Item #{id_agenda} removido do banco!")
+                    st.rerun()
+            else:
+                st.info("Nenhuma atividade cadastrada.")
+
+elif menu == "📂 Clientes & Histórico":
+    st.header("📂 Clientes & Histórico de Atendimentos")
+    
+    tab_c1, tab_c2, tab_c3 = st.tabs([
+        "🔍 Consultar Clientes e Histórico", 
+        "➕ Cadastrar / Editar Cliente", 
+        "🗑️ Gerenciar / Arquivar Cliente"
+    ])
+    
+    with tab_c2:
+        st.subheader("Cadastrar ou Editar Cliente")
+        with st.form("form_novo_cliente"):
+            nome_cli = st.text_input("Nome do Cliente / Condomínio")
+            cnpj_cli = st.text_input("CNPJ")
+            end_cli = st.text_input("Endereço")
+            cid_cli = st.text_input("Cidade / UF", value="Ribeirão Preto - SP")
+            sindico_cli = st.text_input("Síndico")
+            zelador_cli = st.text_input("Zelador")
+            tel_cli = st.text_input("Telefone")
+            email_cli = st.text_input("E-mail")
+            
+            if st.form_submit_button("💾 Salvar / Atualizar Cliente"):
+                if nome_cli:
+                    nome_formatado = nome_cli.strip().upper()
+                    clientes_db[nome_formatado] = {
+                        "cnpj": cnpj_cli,
+                        "endereco": end_cli,
+                        "cidade_uf": cid_cli,
+                        "sindico": sindico_cli,
+                        "zelador": zelador_cli,
+                        "telefone": tel_cli,
+                        "email": email_cli,
+                        "ativo": True
+                    }
+                    salvar_json(CLIENTES_FILE, clientes_db)
+                    st.success(f"Cliente '{nome_formatado}' gravado com sucesso!")
+                    st.rerun()
+                else:
+                    st.error("Informe o nome do cliente.")
+
+    with tab_c3:
+        st.subheader("Arquivar Cliente")
+        if clientes_db:
+            clientes_ativos_lista = [k for k, v in clientes_db.items() if v.get("ativo", True)]
+            if clientes_ativos_lista:
+                cli_excluir = st.selectbox("Selecione o Cliente para Arquivar", clientes_ativos_lista, key="del_cli_select")
+                if st.button("📦 Arquivar Cliente", type="primary"):
+                    clientes_db[cli_excluir]["ativo"] = False
+                    salvar_json(CLIENTES_FILE, clientes_db)
+                    st.success(f"Cliente '{cli_excluir}' foi arquivado!")
+                    st.rerun()
+            else:
+                st.info("Nenhum cliente ativo para arquivar.")
+
+    with tab_c1:
+        st.subheader("Base de Clientes")
+        if clientes_db:
+            cli_selecionado = st.selectbox("Selecione um Cliente", sorted(list(clientes_db.keys())))
+            if cli_selecionado:
+                info = clientes_db[cli_selecionado]
+                st.write(f"**CNPJ:** {info.get('cnpj', '')}")
+                st.write(f"**Endereço:** {info.get('endereco', '')}")
+                st.write(f"**Telefone:** {info.get('telefone', '')}")
+                st.write(f"**Status:** {'Ativo' if info.get('ativo', True) else 'Arquivado'}")
+                
+                nome_pasta_cliente = "".join(c for c in cli_selecionado.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
+                cliente_dir = os.path.join(HISTORICO_CLIENTES_DIR, nome_pasta_cliente)
+                historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
+                
+                st.subheader("📜 Histórico de Atendimentos & Documentos")
+                if os.path.exists(historico_path):
+                    with open(historico_path, "r", encoding="utf-8") as f_h:
+                        hist_data = json.load(f_h)
+                    df_hist = pd.DataFrame(hist_data)
+                    st.dataframe(df_hist, use_container_width=True)
+                else:
+                    st.info("Nenhum histórico gravado para este cliente até o momento.")
+        else:
+            st.info("Nenhum cliente cadastrado no sistema.")
+
+elif menu == "🏢 Dados da Empresa":
+    st.header("🏢 Dados da Empresa & Logotipo")
+    
+    st.subheader("1. Logotipo Oficial")
+    if os.path.exists(LOGO_PATH):
+        st.image(LOGO_PATH, width=180, caption="Logotipo Cadastrado")
+    
+    logo_upload = st.file_uploader("Upload do Logotipo (PNG ou JPG)", type=["png", "jpg", "jpeg"])
+    if logo_upload is not None:
+        with open(LOGO_PATH, "wb") as f:
+            f.write(logo_upload.getbuffer())
+        st.success("Novo logotipo salvo com sucesso!")
+        st.rerun()
+
+    st.subheader("2. Informações Cadastrais")
+    with st.form("form_dados_empresa"):
+        nome_emp = st.text_input("Razão Social / Nome da Empresa", value=empresa_db.get("nome", ""))
+        cnpj_emp = st.text_input("CNPJ", value=empresa_db.get("cnpj", ""))
+        crea_emp = st.text_input("Registro CREA", value=empresa_db.get("crea", ""))
+        tel_emp = st.text_input("Telefone de Contato", value=empresa_db.get("telefone", ""))
+        email_emp = st.text_input("E-mail Oficial", value=empresa_db.get("email", ""))
+        end_emp = st.text_input("Endereço Completo", value=empresa_db.get("endereco", ""))
+        resp_emp = st.text_input("Responsável Técnico Padrão", value=empresa_db.get("resp_tecnico", ""))
+        
+        if st.form_submit_button("💾 Salvar Dados da Empresa", type="primary"):
+            empresa_db.update({
+                "nome": nome_emp, "cnpj": cnpj_emp, "crea": crea_emp,
+                "telefone": tel_emp, "email": email_emp, "endereco": end_emp,
+                "resp_tecnico": resp_emp
+            })
+            salvar_json(EMPRESA_FILE, empresa_db)
+            st.success("Dados da empresa atualizados com sucesso!")
+
+elif menu == "👥 Gestão de Usuários":
+    st.header("👥 Gestão de Usuários, Senhas e Acessos (RBAC)")
+    st.info("💡 **Controle de Acesso Dinâmico:** O Admin pode criar logins para clientes e colaboradores, definindo explicitamente quais botões e telas cada senha terá permissão para visualizar.")
+
+    tab_u1, tab_u2, tab_u3 = st.tabs(["➕ Cadastrar Novo Usuário/Senha", "📋 Usuários Cadastrados", "⚙️ Regras Padrão dos Perfis"])
+
+    with tab_u1:
+        st.subheader("Cadastrar / Atualizar Credenciais de Acesso")
+        with st.form("form_usuarios_rbac"):
+            col_usr1, col_usr2 = st.columns(2)
+            with col_usr1:
+                novo_u = st.text_input("Nome de Usuário (Login)").strip().lower()
+                nova_s = st.text_input("Senha", type="password")
+                nome_completo_u = st.text_input("Nome Completo / Identificação")
+            with col_usr2:
+                novo_p = st.selectbox("Perfil de Acesso", ["master", "tecnico", "cliente"])
+                cli_vinc = st.selectbox("Vincular a Cliente (Opcional)", [""] + sorted(list(clientes_db.keys())))
+                
+            st.divider()
+            st.write("🔑 **Marque abaixo quais telas este usuário poderá acessar:**")
+            
+            # Checkbox individual por funcionalidade
+            modulos_selecionados = []
+            cols_mod = st.columns(3)
+            for idx_m, mod_nome in enumerate(TODOS_MODULOS):
+                with cols_mod[idx_m % 3]:
+                    # Padrão marcado para Master
+                    padrao_chk = True if novo_p == "master" else (mod_nome in permissoes_perfis.get(novo_p, []))
+                    if st.checkbox(mod_nome, value=padrao_chk, key=f"chk_m_{idx_m}"):
+                        modulos_selecionados.append(mod_nome)
+
+            if st.form_submit_button("💾 Cadastrar Credencial com Permissões", type="primary"):
+                if novo_u and nova_s:
+                    usuarios[novo_u] = {
+                        "senha": nova_s,
+                        "nome": nome_completo_u if nome_completo_u else novo_u,
+                        "perfil": novo_p,
+                        "cliente_vinculado": cli_vinc,
+                        "modulos_permitidos": modulos_selecionados
+                    }
+                    salvar_json(USUARIOS_FILE, usuarios)
+                    st.success(f"Usuário '{novo_u}' cadastrado com sucesso e permissões atualizadas!")
+                    st.rerun()
+                else:
+                    st.error("Preencha o nome de usuário e a senha.")
+
+    with tab_u2:
+        st.subheader("Relação de Senhas Cadastradas no Sistema")
+        if usuarios:
+            dados_tabela_usr = []
+            for u_k, u_v in usuarios.items():
+                dados_tabela_usr.append({
+                    "Usuário/Login": u_k,
+                    "Nome": u_v.get("nome", u_k),
+                    "Perfil": u_v.get("perfil", "cliente").upper(),
+                    "Cliente Vinculado": u_v.get("cliente_vinculado", "N/A"),
+                    "Módulos Liberados": len(u_v.get("modulos_permitidos", TODOS_MODULOS))
+                })
+            st.dataframe(pd.DataFrame(dados_tabela_usr), use_container_width=True)
+
+            with st.expander("🗑️ Excluir Usuário"):
+                usr_del = st.selectbox("Selecione o Usuário para Remover", [u for u in usuarios.keys() if u != "admin"])
+                if st.button("Remover Acesso"):
+                    del usuarios[usr_del]
+                    salvar_json(USUARIOS_FILE, usuarios)
+                    st.success(f"Acesso do usuário '{usr_del}' removido!")
+                    st.rerun()
+
+    with tab_u3:
+        st.subheader("Configuração Global de Permissões por Categoria")
+        st.caption("Ajuste aqui as permissões padrão que novos usuários de cada grupo receberão:")
+        
+        with st.form("form_permissoes_globais"):
+            perm_tec = st.multiselect("Módulos Padrão do Perfil TÉCNICO", TODOS_MODULOS, default=permissoes_perfis.get("tecnico", []))
+            perm_cli = st.multiselect("Módulos Padrão do Perfil CLIENTE", TODOS_MODULOS, default=permissoes_perfis.get("cliente", []))
+            
+            if st.form_submit_button("💾 Salvar Regras Globais dos Perfis"):
+                permissoes_perfis["tecnico"] = perm_tec
+                permissoes_perfis["cliente"] = perm_cli
+                salvar_json(PERMISSOES_FILE, permissoes_perfis)
+                st.success("Regras globais de perfis gravadas com sucesso!")
+
+elif menu == "🎫 Chamados Técnicos":
+    st.header("🎫 Chamados Técnicos & Atendimento")
+    
+    with st.form("form_chamado"):
+        # Se for cliente vinculado, auto-seleciona a empresa dele
+        if st.session_state["cliente_vinculado"]:
+            cli_chamado = st.session_state["cliente_vinculado"]
+            st.info(f"Abridor de Chamado Vinculado a: **{cli_chamado}**")
+        else:
+            cli_chamado = st.selectbox("Selecione o Cliente Vinculado", sorted(list(clientes_db.keys())) if clientes_db else ["Geral"])
+            
+        titulo_ch = st.text_input("Título do Chamado / Problema")
+        desc_ch = st.text_area("Descrição Detalhada da Ocorrência")
+        
+        if st.form_submit_button("📩 ABRIR CHAMADO TÉCNICO", type="primary"):
+            if titulo_ch and desc_ch:
+                chamados_db.append({
+                    "id": len(chamados_db) + 1,
+                    "usuario": st.session_state["user"],
+                    "cliente": cli_chamado,
+                    "titulo": titulo_ch,
+                    "descricao": desc_ch,
+                    "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "status": "Aberto"
+                })
+                salvar_json(CHAMADOS_FILE, chamados_db)
+                st.success("Chamado registrado com sucesso!")
+                st.rerun()
+            else:
+                st.error("Preencha o título e a descrição.")
+
+    st.subheader("Chamados Registrados")
+    if chamados_db:
+        df_chamados = pd.DataFrame(chamados_db)
+        # Se for cliente, exibe somente os chamados da empresa dele
+        if st.session_state["perfil"] == "cliente" and st.session_state["cliente_vinculado"]:
+            df_chamados = df_chamados[df_chamados["cliente"] == st.session_state["cliente_vinculado"]]
+            
+        st.dataframe(df_chamados, use_container_width=True)
+    else:
+        st.info("Nenhum chamado aberto até o momento.")
+
+elif menu == "💾 Backup & Restauração":
+    st.header("💾 Backup 100% Completo & Restauração de Dados")
+    st.info("ℹ️ O backup diário completo compacta 100% da base SQLite (Agenda, Rascunhos e Relatórios), arquivos JSON (clientes, empresas, usuários, permissões, chamados, controle de vencimentos), histórico de atendimentos e todas as fotos de vistorias.")
+    
+    col_b1, col_b2 = st.columns(2)
+    with col_b1:
+        st.subheader("1. Gerar Backup Completo")
+        if st.button("📦 Gerar e Baixar Backup 100% Completo (.zip)", type="primary"):
+            data_bytes, file_name = perform_backup_completo()
+            if data_bytes:
+                st.success(f"Backup gerado com sucesso: `{file_name}`")
+                st.download_button("⬇️ Baixar Pacote de Backup (.zip)", data_bytes, file_name=file_name, mime="application/zip")
+
+    with col_b2:
+        st.subheader("2. Restaurar Sistema do Backup")
+        uploaded_backup = st.file_uploader("Carregar pacote de backup (.zip)", type=["zip"])
+        if uploaded_backup is not None:
+            if st.button("⚠️ Restaurar 100% dos Dados", type="primary"):
+                if restaurar_backup_completo(uploaded_backup):
+                    st.success("Sistema, Permissões, Agenda e Vencimentos restaurados com sucesso! Recarregue a página.")
+                    st.rerun()
+                else:
+                    st.error("Erro ao processar o arquivo de backup.")
