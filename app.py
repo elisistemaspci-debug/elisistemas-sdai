@@ -9,7 +9,7 @@ from datetime import datetime
 import streamlit as st
 import pandas as pd
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, KeepTogether
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
@@ -209,7 +209,7 @@ if not st.session_state["logged_in"]:
     tela_login()
     st.stop()
 
-# --- FUNÇÃO GERADORA DE PDF COMPLETA ---
+# --- FUNÇÃO GERADORA DE PDF COM FOTOS E ASSINATURAS ---
 def gerar_pdf_preventiva():
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -220,6 +220,7 @@ def gerar_pdf_preventiva():
     style_celula_bold = ParagraphStyle('CelTabelaBold', parent=styles['Normal'], fontSize=8, leading=9, fontName='Helvetica-Bold', textColor=colors.black)
     style_texto_empresa = ParagraphStyle('EmpresaText', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.black)
     style_sec_header = ParagraphStyle('SecHeader', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.navy)
+    style_center = ParagraphStyle('CenterText', parent=styles['Normal'], fontSize=8, leading=10, alignment=1, textColor=colors.black)
 
     img_logo = Image(LOGO_PATH, width=50, height=35) if os.path.exists(LOGO_PATH) else Paragraph("<b>ELI SISTEMAS</b>", style_celula)
 
@@ -292,16 +293,21 @@ def gerar_pdf_preventiva():
         story.append(t_sec)
         story.append(Spacer(1, 6))
 
-    # 7. Registro Fotográfico
-    fotos = st.session_state.get("fotos_carregadas", [])
-    if fotos:
+    # 7. Registro Fotográfico com Legendas
+    fotos_info = st.session_state.get("fotos_detalhes", [])
+    if fotos_info:
         story.append(Paragraph("<b>7. REGISTRO FOTOGRÁFICO DA INSPEÇÃO</b>", style_sec_header))
         fotos_rows = []
         row_atual = []
-        for caminho_foto in fotos:
+        for f_item in fotos_info:
+            caminho_foto = f_item.get("caminho", "")
+            obs_foto = f_item.get("obs", "")
             if os.path.exists(caminho_foto):
-                img = Image(caminho_foto, width=170, height=120)
-                row_atual.append(img)
+                img = Image(caminho_foto, width=160, height=110)
+                caption_p = Paragraph(f"<font size=7><b>{obs_foto}</b></font>", style_center)
+                cell_box = Table([[img], [caption_p]], colWidths=[165])
+                cell_box.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER')]))
+                row_atual.append(cell_box)
                 if len(row_atual) == 3:
                     fotos_rows.append(row_atual)
                     row_atual = []
@@ -312,7 +318,7 @@ def gerar_pdf_preventiva():
             
         if fotos_rows:
             t_fotos = Table(fotos_rows, colWidths=[185, 185, 185])
-            t_fotos.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('VALIGN', (0,0), (-1,-1), 'MIDDLE')]))
+            t_fotos.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('VALIGN', (0,0), (-1,-1), 'TOP')]))
             story.append(t_fotos)
             story.append(Spacer(1, 6))
 
@@ -328,6 +334,27 @@ def gerar_pdf_preventiva():
     t_obs = Table(dados_obs, colWidths=[555])
     t_obs.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey)]))
     story.append(t_obs)
+    story.append(Spacer(1, 15))
+
+    # 9. Bloco de Assinaturas (Técnico e Cliente)
+    story.append(Paragraph("<b>9. VALIDAÇÃO E ASSINATURAS DAS PARTES</b>", style_sec_header))
+    story.append(Spacer(1, 20))
+    
+    nome_tecnico = st.session_state.get('resp_tecnico', empresa_db.get("resp_tecnico", "Eli Silva"))
+    crea_tecnico = empresa_db.get("crea", "")
+    nome_cliente_rep = st.session_state.get('sindico', st.session_state.get('zelador', st.session_state.get('cliente', '')))
+    doc_cliente_rep = st.session_state.get('doc_representante', '')
+
+    assinaturas_data = [
+        [
+            Paragraph("__________________________________________<br/><b>RESPONSÁVEL TÉCNICO</b><br/>" + f"{nome_tecnico}<br/>CREA: {crea_tecnico}", style_center),
+            Paragraph("__________________________________________<br/><b>REPRESENTANTE / CLIENTE</b><br/>" + f"{nome_cliente_rep}<br/>CPF/RG: {doc_cliente_rep}", style_center)
+        ]
+    ]
+    t_ass = Table(assinaturas_data, colWidths=[277, 277])
+    t_ass.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('VALIGN', (0,0), (-1,-1), 'MIDDLE')]))
+    
+    story.append(KeepTogether(t_ass))
 
     doc.build(story)
     buffer.seek(0)
@@ -345,13 +372,13 @@ def gerar_pdf_preventiva():
 def inicializar_defaults():
     defaults = {
         "cliente": "", "cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP",
-        "sindico": "", "zelador": "", "contato": "", "email": "",
+        "sindico": "", "zelador": "", "contato": "", "email": "", "doc_representante": "",
         "data_visita": datetime.now().strftime("%Y-%m-%d"), "tipo_visita": "Preventiva Trimestral",
         "resp_tecnico": empresa_db.get("resp_tecnico", "Eli Silva"), "acompanhante": "",
         "status_geral": "CONFORME / SISTEMA OPERACIONAL", "central_sdai": "",
         "tipo_central": "SISTEMA ENDEREÇÁVEL", "qtd_lacos": "", "det_fumaca": "",
         "acionadores": "", "avisadores": "", "pressurizacao": "Sim",
-        "tensao_baterias": "24 Vcc", "parecer": "", "orientacoes": "", "fotos_carregadas": []
+        "tensao_baterias": "24 Vcc", "parecer": "", "orientacoes": "", "fotos_detalhes": []
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -466,8 +493,8 @@ if menu == "📋 Nova Vistoria / Laudo":
     
     if uploaded_files:
         fotos_processadas = set()
-        novas_fotos = []
-        for file in uploaded_files:
+        novas_fotos_list = []
+        for idx_f, file in enumerate(uploaded_files):
             file_bytes = file.getvalue()
             file_hash = hashlib.md5(file_bytes).hexdigest()
             if file_hash not in fotos_processadas:
@@ -476,20 +503,34 @@ if menu == "📋 Nova Vistoria / Laudo":
                 caminho_foto = os.path.join(PASTA_FOTOS_VISTORIA, nome_foto)
                 with open(caminho_foto, "wb") as f_img:
                     f_img.write(file_bytes)
-                novas_fotos.append(caminho_foto)
-        st.session_state["fotos_carregadas"] = novas_fotos
-        st.success(f"{len(novas_fotos)} foto(s) única(s) vinculada(s) à vistoria!")
+                
+                # Exibe preview e campo de legenda para a foto
+                col_f1, col_f2 = st.columns([1, 3])
+                with col_f1:
+                    st.image(caminho_foto, width=120)
+                with col_f2:
+                    obs_f = st.text_input(f"Legenda/Descrição da Foto #{idx_f+1}", value=f"Foto {idx_f+1} - Inspeção", key=f"legenda_foto_{file_hash}")
+                
+                novas_fotos_list.append({"caminho": caminho_foto, "obs": obs_f})
+                
+        st.session_state["fotos_detalhes"] = novas_fotos_list
 
     st.subheader("8. Parecer Técnico e Recomendações")
     st.session_state["parecer"] = st.text_area("Parecer Técnico Geral", value=st.session_state["parecer"], height=100)
     st.session_state["orientacoes"] = st.text_area("Recomendações e Ações Corretivas", value=st.session_state["orientacoes"], height=100)
+
+    st.subheader("9. Identificação para Assinaturas")
+    col_a1, col_a2 = st.columns(2)
+    with col_a1:
+        st.session_state["resp_tecnico"] = st.text_input("Responsável Técnico (Nome)", value=st.session_state["resp_tecnico"])
+    with col_a2:
+        st.session_state["doc_representante"] = st.text_input("CPF ou RG do Cliente/Acompanhante", value=st.session_state["doc_representante"], placeholder="Ex: 000.000.000-00")
 
     st.divider()
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
         if st.button("💾 Salvar Rascunho Completo", type="secondary"):
             if st.session_state["cliente"]:
-                # Coleta todo o estado atual
                 estado_completo = {k: v for k, v in st.session_state.items() if k not in ["logged_in", "user", "perfil"]}
                 conn = sqlite3.connect(DB_FILE)
                 cursor = conn.cursor()
@@ -506,7 +547,7 @@ if menu == "📋 Nova Vistoria / Laudo":
     with col_btn2:
         if st.button("📄 Gerar e Salvar PDF do Relatório", type="primary"):
             pdf_bytes = gerar_pdf_preventiva()
-            st.success("Relatório gerado e registrado no histórico!")
+            st.success("Relatório gerado com fotos e campo de assinaturas!")
             st.download_button("💾 Baixar Relatório PDF Completo", pdf_bytes, file_name=f"Vistoria_{st.session_state['cliente']}.pdf", mime="application/pdf")
 
 elif menu == "📂 Rascunhos de Vistoria":
