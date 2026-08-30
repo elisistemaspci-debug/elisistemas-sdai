@@ -70,6 +70,7 @@ def perform_backup_completo():
     zip_path = os.path.join(BACKUP_DIR, zip_filename)
     
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        # Garante a cópia da base SQLite (Contém Agenda, Rascunhos e Relatórios)
         if os.path.exists(DB_FILE):
             zipf.write(DB_FILE, os.path.basename(DB_FILE))
             
@@ -647,7 +648,7 @@ elif menu == "📂 Rascunhos de Vistoria":
 elif menu == "📅 Agenda de Atividades":
     st.header("📅 Agenda de Atividades & Manutenções")
     
-    # Leitura direta mantendo 100% de compatibilidade com todos os dados antigos
+    # Leitura direta garantindo 100% de integridade com o banco de dados
     conn = sqlite3.connect(DB_FILE)
     try:
         df_agenda = pd.read_sql_query(
@@ -908,7 +909,7 @@ elif menu == "🎫 Chamados Técnicos":
 
 elif menu == "💾 Backup & Restauração":
     st.header("💾 Backup 100% Completo & Restauração de Dados")
-    st.info("ℹ️ O backup diário completo compacta 100% da base SQLite, arquivos JSON (clientes, empresas, usuários, chamados), histórico de atendimentos e todas as fotos de vistorias.")
+    st.info("ℹ️ O backup diário completo compacta 100% da base SQLite (Agenda, Rascunhos e Relatórios), arquivos JSON (clientes, empresas, usuários, chamados), histórico de atendimentos e todas as fotos de vistorias.")
     
     col_b1, col_b2 = st.columns(2)
     with col_b1:
@@ -925,7 +926,7 @@ elif menu == "💾 Backup & Restauração":
         if uploaded_backup is not None:
             if st.button("⚠️ Restaurar 100% dos Dados", type="primary"):
                 if restaurar_backup_completo(uploaded_backup):
-                    st.success("Sistema restaurado com sucesso! Recarregue a página.")
+                    st.success("Sistema e Agenda restaurados com sucesso! Recarregue a página.")
                     st.rerun()
                 else:
                     st.error("Erro ao processar o arquivo de backup.")
