@@ -1101,15 +1101,12 @@ elif menu == "🎫 Chamados Técnicos":
 
     st.subheader("Chamados Registrados")
     
-    # Carrega os chamados via DataFrame do JSON salvo ou convertendo a lista existente
     if chamados_db:
         df_chamados = pd.DataFrame(chamados_db)
-        # Garante a coluna de ID para referência
         df_chamados.insert(0, "id", range(len(df_chamados)))
         
         st.info("💡 Clique na coluna **status** de qualquer chamado para alternar entre **Aberto**, **Pendente** ou **Finalizado**, e depois clique no botão abaixo para salvar.")
         
-        # Editor interativo para alterar o status na tabela
         df_editado = st.data_editor(
             df_chamados,
             column_config={
@@ -1131,8 +1128,8 @@ elif menu == "🎫 Chamados Técnicos":
             key="tabela_status_chamados"
         )
 
-        # Botão para salvar as alterações de status na lista e persistir no JSON
         if st.button("Salvar Alterações de Status"):
+            global chamados_db
             novos_dados = []
             for _, linha in df_editado.iterrows():
                 novos_dados.append({
@@ -1144,7 +1141,6 @@ elif menu == "🎫 Chamados Técnicos":
                     "status": linha["status"]
                 })
             
-            global chamados_db
             chamados_db = novos_dados
             salvar_json(CHAMADOS_FILE, chamados_db)
             st.success("Status atualizados com sucesso!")
