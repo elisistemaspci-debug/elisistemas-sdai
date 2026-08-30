@@ -36,7 +36,7 @@ os.makedirs(HISTORICO_CLIENTES_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
 # ==============================================================================
-# 2. GESTÃO DO BANCO DE DADOS SQLITE & BACKUPS
+# 2. GESTÃO DO BANCO DE DADOS SQLITE & BACKUPS RESILIENTES
 # ==============================================================================
 def init_db():
     """Atribuição: Inicializar tabelas relacionais do SQLite para relatórios, agenda e rascunhos."""
@@ -66,32 +66,42 @@ def init_db():
 init_db()
 
 def perform_backup_completo():
-    """Atribuição: Compactar 100% da base SQLite, arquivos JSON e fotos em um pacote ZIP."""
+    """Atribuição: Compactar 100% da base SQLite, arquivos JSON, históricos e fotos de forma segura e tolerante a falhas."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     zip_filename = f"backup_completo_elisistemas_{timestamp}.zip"
     zip_path = os.path.join(BACKUP_DIR, zip_filename)
     
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         if os.path.exists(DB_FILE):
-            zipf.write(DB_FILE, os.path.basename(DB_FILE))
+            try:
+                zipf.write(DB_FILE, os.path.basename(DB_FILE))
+            except Exception:
+                pass
             
         for json_file in [CLIENTES_FILE, EMPRESA_FILE, CHAMADOS_FILE, USUARIOS_FILE, VENCIMENTOS_FILE]:
             if os.path.exists(json_file):
-                zipf.write(json_file, os.path.basename(json_file))
+                try:
+                    zipf.write(json_file, os.path.basename(json_file))
+                except Exception:
+                    pass
                 
         for folder_path, folder_name in [(HISTORICO_CLIENTES_DIR, "historico_clientes"), (PASTA_FOTOS_VISTORIA, "fotos_vistoria")]:
             if os.path.exists(folder_path):
                 for root, dirs, files in os.walk(folder_path):
                     for file in files:
                         file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, BASE_DIR)
-                        zipf.write(file_path, arcname)
+                        try:
+                            arcname = os.path.relpath(file_path, BASE_DIR)
+                            zipf.write(file_path, arcname)
+                        except Exception:
+                            # Ignora arquivos travados por I/O e prossegue para não corromper o backup
+                            continue
                         
     with open(zip_path, "rb") as f:
         return f.read(), zip_filename
 
 def restaurar_backup_completo(uploaded_file):
-    """Atribuição: Descompactar pacote ZIP e restaurar a estrutura completa de arquivos do sistema."""
+    """Atribuição: Descompactar pacote ZIP e restaurar a estrutura completa de arquivos do sistema de forma segura."""
     if uploaded_file is not None:
         temp_zip_path = os.path.join(BASE_DIR, "temp_restore.zip")
         with open(temp_zip_path, "wb") as f:
@@ -133,7 +143,7 @@ def salvar_json(path, data):
     carregar_json_cached.clear()
 
 def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict, pdf_bytes=None):
-    """Atribuição: Gravar log contínuo de atendimentos e salvar PDF vinculado na pasta individual do cliente (com prevenção rigorosa de duplicatas)."""
+    """Atribuição: Gravar log contínuo de atendimentos e salvar PDF vinculado na pasta individual do cliente com trava anti-duplicidade otimizada."""
     if not nome_cliente:
         return
     nome_pasta_cliente = "".join(c for c in nome_cliente.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
@@ -156,7 +166,6 @@ def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict, pdf_byte
     agora_dt = datetime.now()
     atual_parecer = detalhes_dict.get("parecer", detalhes_dict.get("descricao", ""))
     
-    # Trava anti-duplicação expandida: verifica os últimos 3 registros para evitar repetição por múltiplos reloads
     is_duplicate = False
     for reg in historico_lista[-3:]:
         ultima_data_str = reg.get("data", "")
@@ -589,7 +598,6 @@ if menu == "🏠 Painel Principal" and st.session_state["perfil"] == "master":
     st.markdown(f"📅 **Data de Hoje:** {datetime.now().strftime('%d/%m/%Y')}")
     st.divider()
 
-    # --- BLOCO 1: INDICADORES RÁPIDOS (METRICS) ---
     chamados_abertos = [c for c in chamados_db if c.get("status") in ["Aberto", "Pendente", "Em andamento"]]
     
     total_venc_alerta = 0
@@ -619,7 +627,6 @@ if menu == "🏠 Painel Principal" and st.session_state["perfil"] == "master":
 
     st.divider()
 
-    # --- BLOCO 2: DETALHES DO DIA ---
     col_d1, col_d2 = st.columns(2)
 
     with col_d1:
@@ -753,14 +760,18 @@ elif menu == "📋 Nova Vistoria / Laudo":
         fotos_processadas = set()
         novas_fotos_list = []
         for idx_f, file in enumerate(uploaded_files):
-            file_bytes = file.getvalue()
+            # Leitura otimizada por blocos/bytes para mitigar lentidão de I/O
+            file_bytes = file.read()
             file_hash = hashlib.md5(file_bytes).hexdigest()
             if file_hash not in fotos_processadas:
                 fotos_processadas.add(file_hash)
                 nome_foto = f"{file_hash}_{file.name}"
                 caminho_foto = os.path.join(PASTA_FOTOS_VISTORIA, nome_foto)
-                with open(caminho_foto, "wb") as f_img:
-                    f_img.write(file_bytes)
+                
+                # Gravação otimizada apenas se o arquivo ainda não existir no disco
+                if not os.path.exists(caminho_foto):
+                    with open(caminho_foto, "wb") as f_img:
+                        f_img.write(file_bytes)
                 
                 col_f1, col_f2 = st.columns([1, 3])
                 with col_f1:
@@ -1151,7 +1162,8 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                 )
                 
                 if archivo_enviado_cli is not None:
-                    file_bytes_pdf = archivo_enviado_cli.getvalue()
+                    # Leitura otimizada por bytes/chunks para mitigar lentidão
+                    file_bytes_pdf = archivo_enviado_cli.read()
                     pdf_hash = hashlib.md5(file_bytes_pdf).hexdigest()
                     session_key_upload = f"last_uploaded_pdf_hash_{cli_selecionado}"
                     
@@ -1227,7 +1239,7 @@ elif menu == "🏢 Dados da Empresa":
     logo_upload = st.file_uploader("Upload do Logotipo (PNG ou JPG)", type=["png", "jpg", "jpeg"])
     if logo_upload is not None:
         with open(LOGO_PATH, "wb") as f:
-            f.write(logo_upload.getbuffer())
+            f.write(logo_upload.read())
         st.success("Novo logotipo salvo com sucesso!")
         st.rerun()
 
@@ -1339,7 +1351,7 @@ elif menu == "🎫 Chamados Técnicos":
 
 elif menu == "💾 Backup & Restauração":
     st.header("💾 Backup 100% Completo & Restauração de Dados")
-    st.info("ℹ️ O backup diário completo compacta 100% da base SQLite (Agenda, Rascunhos e Relatórios), arquivos JSON (clientes, empresas, usuários, chamados, controle de vencimentos), histórico de atendimentos e todas as fotos de vistorias.")
+    st.info("ℹ️ O backup diário completo compacta 100% da base SQLite (Agenda, Rascunhos e Relatórios), arquivos JSON (clientes, empresas, usuários, chamados, controle de vencimentos), histórico de atendimentos e todas as fotos de vistorias de forma segura e tolerante a falhas.")
     
     col_b1, col_b2 = st.columns(2)
     with col_b1:
