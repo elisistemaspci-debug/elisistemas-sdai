@@ -133,7 +133,7 @@ def salvar_json(path, data):
     carregar_json_cached.clear()
 
 def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict, pdf_bytes=None):
-    """Atribuição: Gravar log contínuo de atendimentos e salvar PDF vinculado na pasta individual do cliente (com prevenção de duplicatas idênticas consecutivas)."""
+    """Atribuição: Gravar log contínuo de atendimentos e salvar PDF vinculado na pasta individual do cliente (com prevenção rigorosa de duplicatas)."""
     if not nome_cliente:
         return
     nome_pasta_cliente = "".join(c for c in nome_cliente.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
@@ -153,23 +153,27 @@ def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict, pdf_byte
         except Exception:
             pass
 
-    # Trava anti-duplicação: evita registrar a mesma ação exata em um intervalo inferior a 5 segundos
     agora_dt = datetime.now()
-    if historico_lista:
-        ultimo_registro = historico_lista[-1]
-        ultima_data_str = ultimo_registro.get("data", "")
-        ultimo_tipo = ultimo_registro.get("tipo", "")
-        ultimo_parecer = ultimo_registro.get("parecer", ultimo_registro.get("descricao", ""))
-        
-        atual_parecer = detalhes_dict.get("parecer", detalhes_dict.get("descricao", ""))
+    atual_parecer = detalhes_dict.get("parecer", detalhes_dict.get("descricao", ""))
+    
+    # Trava anti-duplicação expandida: verifica os últimos 3 registros para evitar repetição por múltiplos reloads
+    is_duplicate = False
+    for reg in historico_lista[-3:]:
+        ultima_data_str = reg.get("data", "")
+        ultimo_tipo = reg.get("tipo", "")
+        ultimo_parecer = reg.get("parecer", reg.get("descricao", ""))
         
         try:
             dt_ultimo = datetime.strptime(ultima_data_str, '%Y-%m-%d %H:%M:%S')
             diferenca_segundos = (agora_dt - dt_ultimo).total_seconds()
-            if diferenca_segundos < 5 and ultimo_tipo == tipo_acao and ultimo_parecer == atual_parecer:
-                return # Ignora duplicata gerada por re-execução do Streamlit
+            if diferenca_segundos < 30 and ultimo_tipo == tipo_acao and ultimo_parecer == atual_parecer:
+                is_duplicate = True
+                break
         except Exception:
             pass
+            
+    if is_duplicate:
+        return
             
     caminho_pdf_relativo = ""
     if pdf_bytes:
@@ -788,7 +792,6 @@ elif menu == "📋 Nova Vistoria / Laudo":
                 estado_completo = {k: v for k, v in st.session_state.items() if k not in ["logged_in", "user", "perfil"]}
                 conn = sqlite3.connect(DB_FILE)
                 cursor = conn.cursor()
-                # UPSERT: Insere ou substitui o rascunho existente com base no nome único do cliente
                 cursor.execute(
                     """
                     INSERT INTO rascunhos (cliente, data_visita, dados_json, atualizado_em) 
@@ -1133,9 +1136,6 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                 st.write(f"**Telefone:** {info.get('telefone', '')}")
                 st.write(f"**Status:** {'Ativo' if info.get('ativo', True) else 'Arquivado'}")
                 
-                # ==============================================================
-                # UPLOAD DE PDF ANTERIOR COM TRAVA ANTI-DUPLICAÇÃO (HASH DE ARQUIVO)
-                # ==============================================================
                 st.markdown("---")
                 st.subheader("📁 Anexar / Enviar PDF de Vistoria Anterior")
                 
@@ -1153,8 +1153,6 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                 if archivo_enviado_cli is not None:
                     file_bytes_pdf = archivo_enviado_cli.getvalue()
                     pdf_hash = hashlib.md5(file_bytes_pdf).hexdigest()
-                    
-                    # Chave de controle na sessão para impedir re-processamento do mesmo arquivo no reload
                     session_key_upload = f"last_uploaded_pdf_hash_{cli_selecionado}"
                     
                     if st.session_state.get(session_key_upload) != pdf_hash:
@@ -1180,8 +1178,8 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                         
                         st.success(f"PDF '{archivo_enviado_cli.name}' enviado e salvo no histórico do cliente com sucesso!")
                         st.rerun()
-                # ==============================================================
-historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
+
+                historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
                 
                 st.subheader("📜 Histórico de Atendimentos, Chamados & Laudos")
                 if os.path.exists(historico_path):
@@ -1192,26 +1190,6 @@ historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
                         hist_data = []
 
                     if hist_data:
-                        # Botão para remover duplicidades automaticamente
-                        if st.button("🧹 Remover Duplicidades do Histórico", key=f"btn_limpar_dup_{cli_selecionado}"):
-                            vistos = set()
-                            hist_limpo = []
-                            for item in hist_data:
-                                chave_unica = (
-                                    item.get("data", ""),
-                                    item.get("tipo", ""),
-                                    item.get("parecer", item.get("descricao", ""))
-                                )
-                                if chave_unica not in vistos:
-                                    vistos.add(chave_unica)
-                                    hist_limpo.append(item)
-                            
-                            with open(historico_path, "w", encoding="utf-8") as f_h_limpo:
-                                json.dump(hist_limpo, f_h_limpo, ensure_ascii=False, indent=4)
-                            
-                            st.success(f"Duplicidades removidas com sucesso! Total de registros limpos: {len(hist_limpo)}")
-                            st.rerun()
-
                         for idx_h, h_item in enumerate(reversed(hist_data)):
                             tipo_at = h_item.get("tipo", "Atendimento")
                             data_at = h_item.get("data", "")
@@ -1219,23 +1197,6 @@ historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
                             obs_at = h_item.get("parecer", h_item.get("descricao", ""))
                             pdf_p = h_item.get("pdf_path", "")
 
-                            with st.expander(f"📌 [{data_at}] {tipo_at} — Status: {status_at}"):
-                                st.write(f"**Detalhes / Parecer:** {obs_at}")
-                                st.write(f"**Responsável Técnico / Usuário:** {h_item.get('resp_tecnico', h_item.get('usuario', 'Sistema'))}")
-                                
-                                if pdf_p and os.path.exists(pdf_p):
-                                    with open(pdf_p, "rb") as pdf_file_down:
-                                        st.download_button(
-                                            label="📥 Baixar / Visualizar PDF da Vistoria",
-                                            data=pdf_file_down.read(),
-                                            file_name=os.path.basename(pdf_p),
-                                            mime="application/pdf",
-                                            key=f"down_hist_pdf_{idx_h}_{cli_selecionado}"
-                                        )
-                    else:
-                        st.info("Nenhum registro no histórico deste cliente.")
-                else:
-                    st.info("Nenhum histórico gravado para este cliente até o momento.")
                             with st.expander(f"📌 [{data_at}] {tipo_at} — Status: {status_at}"):
                                 st.write(f"**Detalhes / Parecer:** {obs_at}")
                                 st.write(f"**Responsável Técnico / Usuário:** {h_item.get('resp_tecnico', h_item.get('usuario', 'Sistema'))}")
