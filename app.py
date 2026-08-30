@@ -6,7 +6,7 @@ import shutil
 import hashlib
 import calendar
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 import streamlit as st
 import pandas as pd
 from reportlab.lib.pagesizes import A4
@@ -24,6 +24,7 @@ CLIENTES_FILE = os.path.join(BASE_DIR, "clientes.json")
 EMPRESA_FILE = os.path.join(BASE_DIR, "empresa.json")
 CHAMADOS_FILE = os.path.join(BASE_DIR, "chamados.json")
 USUARIOS_FILE = os.path.join(BASE_DIR, "usuarios.json")
+VENCIMENTOS_FILE = os.path.join(BASE_DIR, "vencimentos.json")
 LOGO_PATH = os.path.join(BASE_DIR, "logo_empresa.png")
 PASTA_FOTOS_VISTORIA = os.path.join(BASE_DIR, "fotos_vistoria")
 HISTORICO_CLIENTES_DIR = os.path.join(BASE_DIR, "historico_clientes")
@@ -70,11 +71,10 @@ def perform_backup_completo():
     zip_path = os.path.join(BACKUP_DIR, zip_filename)
     
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        # Garante a cópia da base SQLite (Contém Agenda, Rascunhos e Relatórios)
         if os.path.exists(DB_FILE):
             zipf.write(DB_FILE, os.path.basename(DB_FILE))
             
-        for json_file in [CLIENTES_FILE, EMPRESA_FILE, CHAMADOS_FILE, USUARIOS_FILE]:
+        for json_file in [CLIENTES_FILE, EMPRESA_FILE, CHAMADOS_FILE, USUARIOS_FILE, VENCIMENTOS_FILE]:
             if os.path.exists(json_file):
                 zipf.write(json_file, os.path.basename(json_file))
                 
@@ -158,6 +158,8 @@ clientes_db = carregar_json(CLIENTES_FILE, {})
 if not isinstance(clientes_db, dict):
     clientes_db = {}
 
+vencimentos_db = carregar_json(VENCIMENTOS_FILE, {})
+
 empresa_db = carregar_json(EMPRESA_FILE, {
     "nome": "ELI SISTEMAS PROTEÇÃO CONTRA INCÊNDIO",
     "cnpj": "68.440.457/0001-50",
@@ -199,6 +201,24 @@ ITENS_SECOES = {
         ("6.2 Portas Corta-Fogo / Eletroímãs", "Liberação automática dos eletroímãs em caso de alarme geral")
     ]
 }
+
+# --- HELPER DE STATUS DE VENCIMENTO ---
+def calcular_status_vencimento(data_str):
+    if not data_str or data_str == "N/A":
+        return "⚪ Não Informado", "gray"
+    try:
+        dt_venc = datetime.strptime(data_str, "%Y-%m-%d").date()
+        hoje = datetime.now().date()
+        dias_restantes = (dt_venc - hoje).days
+
+        if dias_restantes < 0:
+            return f"🔴 VENCIDO ({abs(dias_restantes)}d)", "red"
+        elif dias_restantes <= 30:
+            return f"🟡 VENCE EM BREVE ({dias_restantes}d)", "orange"
+        else:
+            return "🟢 EM DIA / OK", "green"
+    except Exception:
+        return "⚪ Data Inválida", "gray"
 
 # --- GERENCIAMENTO DE AUTENTICAÇÃO ---
 if "logged_in" not in st.session_state:
@@ -267,7 +287,6 @@ def gerar_pdf_preventiva():
     story.append(tabela_cabecalho)
     story.append(Spacer(1, 6))
 
-    # 1. Dados da Edificação
     story.append(Paragraph("<b>1. DADOS DA EDIFICAÇÃO E IDENTIFICAÇÃO DA VISITA TÉCNICA</b>", style_sec_header))
     dados_edif = [
         [Paragraph(f"<b>CLIENTE:</b> {st.session_state.get('cliente', '')}", style_celula), Paragraph(f"<b>Data da Visita:</b> {st.session_state.get('data_visita', '')}", style_celula)],
@@ -279,7 +298,6 @@ def gerar_pdf_preventiva():
     story.append(t_edif)
     story.append(Spacer(1, 6))
 
-    # 2. Caracterização Técnica
     story.append(Paragraph("<b>2. CARACTERIZAÇÃO TÉCNICA DO SISTEMA</b>", style_sec_header))
     dados_tec = [
         [Paragraph(f"<b>Central:</b> {st.session_state.get('central_sdai', '')}", style_celula), Paragraph(f"<b>Tipo:</b> {st.session_state.get('tipo_central', '')}", style_celula), Paragraph(f"<b>Qtd. Laços:</b> {st.session_state.get('qtd_lacos', '')}", style_celula)],
@@ -291,7 +309,6 @@ def gerar_pdf_preventiva():
     story.append(t_tec)
     story.append(Spacer(1, 8))
 
-    # 3, 4, 5, 6 - Tabelas de Itens de Inspeção
     titulos_secoes = {
         "sec3": "3. INSPEÇÃO E TESTES FUNCIONAIS DA CENTRAL / FONTE AUXILIAR",
         "sec4": "4. INFRAESTRUTURA E LAÇOS DE COMUNICAÇÃO (SDAI)",
@@ -325,7 +342,6 @@ def gerar_pdf_preventiva():
         story.append(t_sec)
         story.append(Spacer(1, 6))
 
-    # 7. Registro Fotográfico
     fotos_info = st.session_state.get("fotos_detalhes", [])
     if fotos_info:
         story.append(Paragraph("<b>7. REGISTRO FOTOGRÁFICO DA INSPEÇÃO</b>", style_sec_header))
@@ -354,7 +370,6 @@ def gerar_pdf_preventiva():
             story.append(t_fotos)
             story.append(Spacer(1, 6))
 
-    # 8. Parecer Técnico
     story.append(Paragraph("<b>8. PARECER TÉCNICO E RECOMENDAÇÕES CORRETIVAS</b>", style_sec_header))
     parecer_txt = st.session_state.get("parecer", "Sem observações adicionais.")
     orientacoes_txt = st.session_state.get("orientacoes", "Manter a periodicidade das inspeções preventivas conforme normas NBR 17240 / IT 19.")
@@ -368,7 +383,6 @@ def gerar_pdf_preventiva():
     story.append(t_obs)
     story.append(Spacer(1, 15))
 
-    # 9. Assinaturas
     story.append(Paragraph("<b>9. VALIDAÇÃO E ASSINATURAS DAS PARTES</b>", style_sec_header))
     story.append(Spacer(1, 20))
     
@@ -446,6 +460,7 @@ with st.sidebar:
         opcoes_menu = [
             "📋 Nova Vistoria / Laudo", 
             "📂 Rascunhos de Vistoria", 
+            "📊 Controle de Vencimentos",
             "📅 Agenda de Atividades", 
             "📂 Clientes & Histórico", 
             "🏢 Dados da Empresa", 
@@ -645,10 +660,116 @@ elif menu == "📂 Rascunhos de Vistoria":
     else:
         st.info("Nenhum rascunho pendente registrado.")
 
+elif menu == "📊 Controle de Vencimentos":
+    st.header("📊 Controle de Vencimentos & Oportunidades de Orçamento")
+    st.info("💡 **Aviso Automático de 30 Dias:** As células ganham destaque em amarelo quando estiverem a 1 mês do vencimento (ideal para ligar e ofertar orçamento) e em vermelho caso já estejam vencidas.")
+
+    # Estatísticas de Alertas
+    total_vencidos = 0
+    total_alerta = 0
+
+    for cli, dados in vencimentos_db.items():
+        for item_k in ["deteccao", "extintores", "mangueiras", "avcb"]:
+            data_val = dados.get(item_k, "")
+            if data_val:
+                st_txt, _ = calcular_status_vencimento(data_val)
+                if "VENCIDO" in st_txt:
+                    total_vencidos += 1
+                elif "VENCE EM BREVE" in st_txt:
+                    total_alerta += 1
+
+    col_st1, col_st2, col_st3 = st.columns(3)
+    col_st1.metric("🔴 Vencidos (Urgente)", total_vencidos)
+    col_st2.metric("🟡 Vencem em até 30 Dias (Ligar)", total_alerta)
+    col_st3.metric("🏢 Clientes Cadastrados no Controle", len(vencimentos_db))
+
+    st.divider()
+
+    tab_v1, tab_v2 = st.tabs(["📋 Planilha Geral de Vencimentos", "✏️ Atualizar / Cadastrar Datas"])
+
+    with tab_v2:
+        st.subheader("Atualizar Vencimentos do Cliente")
+        clientes_ativos_v = sorted(list(clientes_db.keys())) if clientes_db else []
+        
+        col_cv1, col_cv2 = st.columns([2, 1])
+        with col_cv1:
+            cli_venc_sel = st.selectbox("Selecione o Cliente / Condomínio", ["-- Novo / Outro --"] + clientes_ativos_v)
+            if cli_venc_sel == "-- Novo / Outro --":
+                nome_cliente_venc = st.text_input("Nome do Cliente")
+            else:
+                nome_cliente_venc = cli_venc_sel
+
+        dados_existentes = vencimentos_db.get(nome_cliente_venc, {}) if nome_cliente_venc else {}
+
+        with st.form("form_vencimentos"):
+            st.caption("Deixe em branco ou selecione a data correspondente ao próximo vencimento do serviço:")
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                dt_det = st.date_input("Tipo Detecção", value=datetime.strptime(dados_existentes.get("deteccao"), "%Y-%m-%d") if dados_existentes.get("deteccao") else datetime.now())
+                chk_det = st.checkbox("Ativar Detecção", value=bool(dados_existentes.get("deteccao")))
+            with c2:
+                dt_ext = st.date_input("Extintores", value=datetime.strptime(dados_existentes.get("extintores"), "%Y-%m-%d") if dados_existentes.get("extintores") else datetime.now())
+                chk_ext = st.checkbox("Ativar Extintores", value=bool(dados_existentes.get("extintores")))
+            with c3:
+                dt_man = st.date_input("Mangueiras", value=datetime.strptime(dados_existentes.get("mangueiras"), "%Y-%m-%d") if dados_existentes.get("mangueiras") else datetime.now())
+                chk_man = st.checkbox("Ativar Mangueiras", value=bool(dados_existentes.get("mangueiras")))
+            with c4:
+                dt_avcb = st.date_input("AVCB", value=datetime.strptime(dados_existentes.get("avcb"), "%Y-%m-%d") if dados_existentes.get("avcb") else datetime.now())
+                chk_avcb = st.checkbox("Ativar AVCB", value=bool(dados_existentes.get("avcb")))
+
+            obs_venc = st.text_area("Observação / Anotações de Atendimento", value=dados_existentes.get("obs", ""))
+
+            if st.form_submit_button("💾 Salvar Controle de Vencimentos", type="primary"):
+                if nome_cliente_venc.strip():
+                    nome_key = nome_cliente_venc.strip().upper()
+                    vencimentos_db[nome_key] = {
+                        "deteccao": dt_det.strftime("%Y-%m-%d") if chk_det else "",
+                        "extintores": dt_ext.strftime("%Y-%m-%d") if chk_ext else "",
+                        "mangueiras": dt_man.strftime("%Y-%m-%d") if chk_man else "",
+                        "avcb": dt_avcb.strftime("%Y-%m-%d") if chk_avcb else "",
+                        "obs": obs_venc
+                    }
+                    salvar_json(VENCIMENTOS_FILE, vencimentos_db)
+                    st.success(f"Vencimentos de '{nome_key}' atualizados com sucesso!")
+                    st.rerun()
+                else:
+                    st.error("Informe o nome do cliente.")
+
+    with tab_v1:
+        if vencimentos_db:
+            lista_tabela = []
+            for cli, d in vencimentos_db.items():
+                st_det, _ = calcular_status_vencimento(d.get("deteccao", ""))
+                st_ext, _ = calcular_status_vencimento(d.get("extintores", ""))
+                st_man, _ = calcular_status_vencimento(d.get("mangueiras", ""))
+                st_avcb, _ = calcular_status_vencimento(d.get("avcb", ""))
+
+                lista_tabela.append({
+                    "Cliente": cli,
+                    "Tipo Detecção": f"{d.get('deteccao', 'N/A')} ({st_det})",
+                    "Extintores": f"{d.get('extintores', 'N/A')} ({st_ext})",
+                    "Mangueiras": f"{d.get('mangueiras', 'N/A')} ({st_man})",
+                    "AVCB": f"{d.get('avcb', 'N/A')} ({st_avcb})",
+                    "Observação": d.get("obs", "")
+                })
+
+            df_venc = pd.DataFrame(lista_tabela)
+            st.dataframe(df_venc, use_container_width=True, height=400)
+
+            # Opção para excluir um registro
+            with st.expander("🗑️ Excluir Cliente do Controle de Vencimentos"):
+                cli_del_v = st.selectbox("Selecione o Cliente para Remover", sorted(list(vencimentos_db.keys())))
+                if st.button("Remover Registro"):
+                    del vencimentos_db[cli_del_v]
+                    salvar_json(VENCIMENTOS_FILE, vencimentos_db)
+                    st.success("Registro removido com sucesso!")
+                    st.rerun()
+        else:
+            st.info("Nenhum vencimento cadastrado até o momento. Utilize a aba 'Atualizar / Cadastrar Datas' para iniciar.")
+
 elif menu == "📅 Agenda de Atividades":
     st.header("📅 Agenda de Atividades & Manutenções")
     
-    # Leitura direta garantindo 100% de integridade com o banco de dados
     conn = sqlite3.connect(DB_FILE)
     try:
         df_agenda = pd.read_sql_query(
@@ -909,7 +1030,7 @@ elif menu == "🎫 Chamados Técnicos":
 
 elif menu == "💾 Backup & Restauração":
     st.header("💾 Backup 100% Completo & Restauração de Dados")
-    st.info("ℹ️ O backup diário completo compacta 100% da base SQLite (Agenda, Rascunhos e Relatórios), arquivos JSON (clientes, empresas, usuários, chamados), histórico de atendimentos e todas as fotos de vistorias.")
+    st.info("ℹ️ O backup diário completo compacta 100% da base SQLite (Agenda, Rascunhos e Relatórios), arquivos JSON (clientes, empresas, usuários, chamados, controle de vencimentos), histórico de atendimentos e todas as fotos de vistorias.")
     
     col_b1, col_b2 = st.columns(2)
     with col_b1:
@@ -926,7 +1047,7 @@ elif menu == "💾 Backup & Restauração":
         if uploaded_backup is not None:
             if st.button("⚠️ Restaurar 100% dos Dados", type="primary"):
                 if restaurar_backup_completo(uploaded_backup):
-                    st.success("Sistema e Agenda restaurados com sucesso! Recarregue a página.")
+                    st.success("Sistema, Agenda e Vencimentos restaurados com sucesso! Recarregue a página.")
                     st.rerun()
                 else:
                     st.error("Erro ao processar o arquivo de backup.")
