@@ -94,7 +94,6 @@ def perform_backup_completo():
                             arcname = os.path.relpath(file_path, BASE_DIR)
                             zipf.write(file_path, arcname)
                         except Exception:
-                            # Ignora arquivos travados por I/O e prossegue para não corromper o backup
                             continue
                         
     with open(zip_path, "rb") as f:
@@ -760,7 +759,6 @@ elif menu == "📋 Nova Vistoria / Laudo":
         fotos_processadas = set()
         novas_fotos_list = []
         for idx_f, file in enumerate(uploaded_files):
-            # Leitura otimizada por blocos/bytes para mitigar lentidão de I/O
             file_bytes = file.read()
             file_hash = hashlib.md5(file_bytes).hexdigest()
             if file_hash not in fotos_processadas:
@@ -768,7 +766,6 @@ elif menu == "📋 Nova Vistoria / Laudo":
                 nome_foto = f"{file_hash}_{file.name}"
                 caminho_foto = os.path.join(PASTA_FOTOS_VISTORIA, nome_foto)
                 
-                # Gravação otimizada apenas se o arquivo ainda não existir no disco
                 if not os.path.exists(caminho_foto):
                     with open(caminho_foto, "wb") as f_img:
                         f_img.write(file_bytes)
@@ -1085,10 +1082,11 @@ elif menu == "📅 Agenda de Atividades":
 elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "master":
     st.header("📂 Clientes & Histórico de Atendimentos")
     
-    tab_c1, tab_c2, tab_c3 = st.tabs([
+    tab_c1, tab_c2, tab_c3, tab_c4 = st.tabs([
         "🔍 Consultar Clientes e Histórico", 
         "➕ Cadastrar / Editar Cliente", 
-        "🗑️ Gerenciar / Arquivar Cliente"
+        "🗑️ Gerenciar / Arquivar Cliente",
+        "📥📤 Exportar / Importar Base"
     ])
     
     with tab_c2:
@@ -1136,6 +1134,92 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
             else:
                 st.info("Nenhum cliente ativo para arquivar.")
 
+    with tab_c4:
+        st.subheader("Gestão de Backup e Transferência da Base de Clientes")
+        st.info("Utilize as opções abaixo para exportar a sua lista de clientes para CSV/Excel ou restaurá-la/atualizá-la enviando um arquivo preenchido.")
+
+        if clientes_db:
+            lista_export = []
+            for cli_n, cli_v in clientes_db.items():
+                lista_export.append({
+                    "Cliente": cli_n,
+                    "CNPJ": cli_v.get("cnpj", ""),
+                    "Endereço": cli_v.get("endereco", ""),
+                    "Cidade / UF": cli_v.get("cidade_uf", ""),
+                    "Síndico": cli_v.get("sindico", ""),
+                    "Zelador": cli_v.get("zelador", ""),
+                    "Telefone": cli_v.get("telefone", ""),
+                    "E-mail": cli_v.get("email", ""),
+                    "Ativo": cli_v.get("ativo", True)
+                })
+            df_clientes_export = pd.DataFrame(lista_export)
+
+            col_exp1, col_exp2 = st.columns(2)
+            with col_exp1:
+                csv_data = df_clientes_export.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Baixar Clientes em CSV",
+                    data=csv_data,
+                    file_name=f"clientes_elisistemas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    type="primary"
+                )
+            with col_exp2:
+                excel_buffer = io.BytesIO()
+                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                    df_clientes_export.to_excel(writer, index=False, sheet_name='Clientes')
+                excel_bytes = excel_buffer.getvalue()
+                st.download_button(
+                    label="📥 Baixar Clientes em Excel (.xlsx)",
+                    data=excel_bytes,
+                    file_name=f"clientes_elisistemas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary"
+                )
+        else:
+            st.warning("Não há clientes cadastrados para exportar.")
+
+        st.markdown("---")
+        st.subheader("Importar Base de Clientes (Upload)")
+        uploaded_clientes_file = st.file_uploader("Selecione um arquivo CSV ou Excel (.xlsx) preenchido com os clientes", type=["csv", "xlsx"])
+        
+        if uploaded_clientes_file is not None:
+            try:
+                if uploaded_clientes_file.name.endswith('.csv'):
+                    df_import = pd.read_csv(uploaded_clientes_file)
+                else:
+                    df_import = pd.read_excel(uploaded_clientes_file)
+
+                st.write("Prévia dos dados importados:", df_import.head())
+
+                modo_import = st.radio("Modo de Importação", ["Mesclar com a base existente", "Substituir totalmente a base existente"])
+
+                if st.button("Confirmar Importação da Base", type="primary"):
+                    if modo_import == "Substituir totalmente a base existente":
+                        clientes_db.clear()
+
+                    import_count = 0
+                    for _, row in df_import.iterrows():
+                        nome_c = str(row.get("Cliente", "")).strip().upper()
+                        if nome_c and nome_c != "NAN":
+                            clientes_db[nome_c] = {
+                                "cnpj": str(row.get("CNPJ", "")) if pd.notna(row.get("CNPJ", "")) else "",
+                                "endereco": str(row.get("Endereço", "")) if pd.notna(row.get("Endereço", "")) else "",
+                                "cidade_uf": str(row.get("Cidade / UF", "")) if pd.notna(row.get("Cidade / UF", "")) else "Ribeirão Preto - SP",
+                                "sindico": str(row.get("Síndico", "")) if pd.notna(row.get("Síndico", "")) else "",
+                                "zelador": str(row.get("Zelador", "")) if pd.notna(row.get("Zelador", "")) else "",
+                                "telefone": str(row.get("Telefone", "")) if pd.notna(row.get("Telefone", "")) else "",
+                                "email": str(row.get("E-mail", "")) if pd.notna(row.get("E-mail", "")) else "",
+                                "ativo": bool(row.get("Ativo", True))
+                            }
+                            import_count += 1
+
+                    salvar_json(CLIENTES_FILE, clientes_db)
+                    st.success(f"{import_count} clientes importados/atualizados com sucesso! Atualize a página.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao processar o arquivo importado: {e}")
+
     with tab_c1:
         st.subheader("Base de Clientes")
         if clientes_db:
@@ -1162,7 +1246,6 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                 )
                 
                 if archivo_enviado_cli is not None:
-                    # Leitura otimizada por bytes/chunks para mitigar lentidão
                     file_bytes_pdf = archivo_enviado_cli.read()
                     pdf_hash = hashlib.md5(file_bytes_pdf).hexdigest()
                     session_key_upload = f"last_uploaded_pdf_hash_{cli_selecionado}"
