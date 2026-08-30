@@ -209,7 +209,7 @@ if not st.session_state["logged_in"]:
     tela_login()
     st.stop()
 
-# --- FUNÇÕES DE PDF ---
+# --- FUNÇÃO GERADORA DE PDF COMPLETA ---
 def gerar_pdf_preventiva():
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -217,8 +217,9 @@ def gerar_pdf_preventiva():
     styles = getSampleStyleSheet()
     
     style_celula = ParagraphStyle('CelTabela', parent=styles['Normal'], fontSize=8, leading=9, textColor=colors.black)
+    style_celula_bold = ParagraphStyle('CelTabelaBold', parent=styles['Normal'], fontSize=8, leading=9, fontName='Helvetica-Bold', textColor=colors.black)
     style_texto_empresa = ParagraphStyle('EmpresaText', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.black)
-    style_sec_header = ParagraphStyle('SecHeader', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.black)
+    style_sec_header = ParagraphStyle('SecHeader', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.navy)
 
     img_logo = Image(LOGO_PATH, width=50, height=35) if os.path.exists(LOGO_PATH) else Paragraph("<b>ELI SISTEMAS</b>", style_celula)
 
@@ -233,6 +234,7 @@ def gerar_pdf_preventiva():
     story.append(tabela_cabecalho)
     story.append(Spacer(1, 6))
 
+    # 1. Dados da Edificação
     story.append(Paragraph("<b>1. DADOS DA EDIFICAÇÃO E IDENTIFICAÇÃO DA VISITA TÉCNICA</b>", style_sec_header))
     dados_edif = [
         [Paragraph(f"<b>CLIENTE:</b> {st.session_state.get('cliente', '')}", style_celula), Paragraph(f"<b>Data da Visita:</b> {st.session_state.get('data_visita', '')}", style_celula)],
@@ -242,6 +244,90 @@ def gerar_pdf_preventiva():
     t_edif = Table(dados_edif, colWidths=[330, 225])
     t_edif.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey)]))
     story.append(t_edif)
+    story.append(Spacer(1, 6))
+
+    # 2. Caracterização Técnica
+    story.append(Paragraph("<b>2. CARACTERIZAÇÃO TÉCNICA DO SISTEMA</b>", style_sec_header))
+    dados_tec = [
+        [Paragraph(f"<b>Central:</b> {st.session_state.get('central_sdai', '')}", style_celula), Paragraph(f"<b>Tipo:</b> {st.session_state.get('tipo_central', '')}", style_celula), Paragraph(f"<b>Qtd. Laços:</b> {st.session_state.get('qtd_lacos', '')}", style_celula)],
+        [Paragraph(f"<b>Detectores:</b> {st.session_state.get('det_fumaca', '')}", style_celula), Paragraph(f"<b>Acionadores:</b> {st.session_state.get('acionadores', '')}", style_celula), Paragraph(f"<b>Avisadores:</b> {st.session_state.get('avisadores', '')}", style_celula)],
+        [Paragraph(f"<b>Pressurização:</b> {st.session_state.get('pressurizacao', '')}", style_celula), Paragraph(f"<b>Tensão Baterias:</b> {st.session_state.get('tensao_baterias', '')}", style_celula), Paragraph(f"<b>Status Geral:</b> {st.session_state.get('status_geral', '')}", style_celula_bold)]
+    ]
+    t_tec = Table(dados_tec, colWidths=[185, 185, 185])
+    t_tec.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey)]))
+    story.append(t_tec)
+    story.append(Spacer(1, 8))
+
+    # 3, 4, 5, 6 - Tabelas de Itens de Inspeção
+    titulos_secoes = {
+        "sec3": "3. INSPEÇÃO E TESTES FUNCIONAIS DA CENTRAL / FONTE AUXILIAR",
+        "sec4": "4. INFRAESTRUTURA E LAÇOS DE COMUNICAÇÃO (SDAI)",
+        "sec5": "5. DISPOSITIVOS DE CAMPO E TESTES AMOSTRAIS",
+        "sec6": "6. AUTOMAÇÕES, SINAIS DE INTERTRAVAMENTO E SEGURANÇA"
+    }
+
+    for sec_key, titulo_sec in titulos_secoes.items():
+        story.append(Paragraph(f"<b>{titulo_sec}</b>", style_sec_header))
+        tabela_dados = [[Paragraph("<b>Item / Descrição Normativa</b>", style_celula_bold), Paragraph("<b>Status</b>", style_celula_bold), Paragraph("<b>Medição</b>", style_celula_bold), Paragraph("<b>Observação</b>", style_celula_bold)]]
+        
+        for idx, (item_nome, norma_ref) in enumerate(ITENS_SECOES[sec_key]):
+            st_val = st.session_state.get(f"{sec_key}_{idx}_status", "CONFORME")
+            med_val = st.session_state.get(f"{sec_key}_{idx}_val", "")
+            obs_val = st.session_state.get(f"{sec_key}_{idx}_obs", "")
+            
+            p_item = Paragraph(f"<b>{item_nome}</b><br/><font size=6 color=grey>{norma_ref}</font>", style_celula)
+            p_st = Paragraph(f"<b>{st_val}</b>", style_celula)
+            p_med = Paragraph(med_val, style_celula)
+            p_obs = Paragraph(obs_val, style_celula)
+            
+            tabela_dados.append([p_item, p_st, p_med, p_obs])
+            
+        t_sec = Table(tabela_dados, colWidths=[240, 75, 80, 160])
+        t_sec.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke),
+            ('BOX', (0,0), (-1,-1), 0.5, colors.grey),
+            ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE')
+        ]))
+        story.append(t_sec)
+        story.append(Spacer(1, 6))
+
+    # 7. Registro Fotográfico
+    fotos = st.session_state.get("fotos_carregadas", [])
+    if fotos:
+        story.append(Paragraph("<b>7. REGISTRO FOTOGRÁFICO DA INSPEÇÃO</b>", style_sec_header))
+        fotos_rows = []
+        row_atual = []
+        for caminho_foto in fotos:
+            if os.path.exists(caminho_foto):
+                img = Image(caminho_foto, width=170, height=120)
+                row_atual.append(img)
+                if len(row_atual) == 3:
+                    fotos_rows.append(row_atual)
+                    row_atual = []
+        if row_atual:
+            while len(row_atual) < 3:
+                row_atual.append(Paragraph("", style_celula))
+            fotos_rows.append(row_atual)
+            
+        if fotos_rows:
+            t_fotos = Table(fotos_rows, colWidths=[185, 185, 185])
+            t_fotos.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('VALIGN', (0,0), (-1,-1), 'MIDDLE')]))
+            story.append(t_fotos)
+            story.append(Spacer(1, 6))
+
+    # 8. Parecer Técnico e Orientações
+    story.append(Paragraph("<b>8. PARECER TÉCNICO E RECOMENDAÇÕES CORRETIVAS</b>", style_sec_header))
+    parecer_txt = st.session_state.get("parecer", "Sem observações adicionais.")
+    orientacoes_txt = st.session_state.get("orientacoes", "Manter a periodicidade das inspeções preventivas conforme normas NBR 17240 / IT 19.")
+    
+    dados_obs = [
+        [Paragraph(f"<b>Parecer Técnico Geral:</b><br/>{parecer_txt}", style_celula)],
+        [Paragraph(f"<b>Recomendações e Ações Corretivas:</b><br/>{orientacoes_txt}", style_celula)]
+    ]
+    t_obs = Table(dados_obs, colWidths=[555])
+    t_obs.setStyle(TableStyle([('BOX', (0,0), (-1,-1), 0.5, colors.grey), ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey)]))
+    story.append(t_obs)
 
     doc.build(story)
     buffer.seek(0)
@@ -296,7 +382,6 @@ with st.sidebar:
         
     st.divider()
 
-    # Ocupa o menu "Clientes & Histórico" APENAS para o usuário MASTER
     if st.session_state["perfil"] == "master":
         opcoes_menu = [
             "📋 Nova Vistoria / Laudo", 
@@ -309,7 +394,6 @@ with st.sidebar:
             "💾 Backup & Restauração"
         ]
     else:
-        # Usuários de perfil 'cliente' enxergam apenas os Chamados Técnicos
         opcoes_menu = ["🎫 Chamados Técnicos"]
         
     menu = st.radio("Navegação Principal", opcoes_menu)
@@ -337,7 +421,7 @@ if menu == "📋 Nova Vistoria / Laudo":
         st.session_state["contato"] = st.text_input("Contato / Telefone", value=st.session_state["contato"])
     with col2:
         st.session_state["endereco"] = st.text_input("Endereço", value=st.session_state["endereco"])
-        st.session_state["data_visita"] = st.date_input("Data da Visita", datetime.now()).strftime("%Y-%m-%d")
+        st.session_state["data_visita"] = st.date_input("Data da Visita", datetime.strptime(st.session_state["data_visita"], "%Y-%m-%d") if isinstance(st.session_state["data_visita"], str) else datetime.now()).strftime("%Y-%m-%d")
         st.session_state["zelador"] = st.text_input("Zelador / Resp. Local", value=st.session_state["zelador"])
         st.session_state["email"] = st.text_input("E-mail do Cliente", value=st.session_state["email"])
 
@@ -378,7 +462,7 @@ if menu == "📋 Nova Vistoria / Laudo":
                 st.session_state[f"{sec_key}_{idx}_obs"] = st.text_input("Observação", value=st.session_state[f"{sec_key}_{idx}_obs"], key=f"ob_{sec_key}_{idx}", placeholder="Detalhes", label_visibility="collapsed")
 
     st.subheader("7. Registro Fotográfico da Inspeção")
-    uploaded_files = st.file_uploader("Carregar Fotos da Vistoria (Evita fotos duplicadas automaticamente)", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+    uploaded_files = st.file_uploader("Carregar Fotos da Vistoria", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
     
     if uploaded_files:
         fotos_processadas = set()
@@ -403,18 +487,19 @@ if menu == "📋 Nova Vistoria / Laudo":
     st.divider()
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        if st.button("💾 Salvar Rascunho da Vistoria", type="secondary"):
+        if st.button("💾 Salvar Rascunho Completo", type="secondary"):
             if st.session_state["cliente"]:
+                # Coleta todo o estado atual
+                estado_completo = {k: v for k, v in st.session_state.items() if k not in ["logged_in", "user", "perfil"]}
                 conn = sqlite3.connect(DB_FILE)
                 cursor = conn.cursor()
-                dados_json = json.dumps({"cnpj": st.session_state["cnpj"], "endereco": st.session_state["endereco"]})
                 cursor.execute(
                     "INSERT INTO rascunhos (cliente, data_visita, dados_json, atualizado_em) VALUES (?, ?, ?, ?)",
-                    (st.session_state["cliente"], st.session_state["data_visita"], dados_json, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    (st.session_state["cliente"], st.session_state["data_visita"], json.dumps(estado_completo), datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                 )
                 conn.commit()
                 conn.close()
-                st.success("Rascunho salvo com sucesso!")
+                st.success("Rascunho completo salvo com sucesso!")
             else:
                 st.error("Informe o nome do cliente para salvar o rascunho.")
 
@@ -422,7 +507,7 @@ if menu == "📋 Nova Vistoria / Laudo":
         if st.button("📄 Gerar e Salvar PDF do Relatório", type="primary"):
             pdf_bytes = gerar_pdf_preventiva()
             st.success("Relatório gerado e registrado no histórico!")
-            st.download_button("💾 Baixar Relatório PDF", pdf_bytes, file_name=f"Vistoria_{st.session_state['cliente']}.pdf", mime="application/pdf")
+            st.download_button("💾 Baixar Relatório PDF Completo", pdf_bytes, file_name=f"Vistoria_{st.session_state['cliente']}.pdf", mime="application/pdf")
 
 elif menu == "📂 Rascunhos de Vistoria":
     st.header("📂 Rascunhos de Vistoria")
@@ -433,17 +518,31 @@ elif menu == "📂 Rascunhos de Vistoria":
     
     if not df_rascunhos.empty:
         st.dataframe(df_rascunhos, use_container_width=True)
-        col_r1, col_r2 = st.columns(2)
+        col_r1, col_r2, col_r3 = st.columns(3)
         with col_r1:
-            id_carregar = st.number_input("ID do Rascunho para Excluir", min_value=1, step=1)
+            id_rascunho = st.number_input("ID do Rascunho", min_value=1, step=1)
         with col_r2:
+            if st.button("📥 Carregar / Restaurar Rascunho", type="primary"):
+                conn = sqlite3.connect(DB_FILE)
+                cursor = conn.cursor()
+                cursor.execute("SELECT dados_json FROM rascunhos WHERE id = ?", (id_rascunho,))
+                row = cursor.fetchone()
+                conn.close()
+                if row:
+                    dados_recuperados = json.loads(row[0])
+                    for key_r, val_r in dados_recuperados.items():
+                        st.session_state[key_r] = val_r
+                    st.success(f"Rascunho #{id_rascunho} carregado no formulário! Vá até a aba 'Nova Vistoria' para continuar.")
+                else:
+                    st.error("ID de rascunho não encontrado.")
+        with col_r3:
             if st.button("🗑️ Excluir Rascunho"):
                 conn = sqlite3.connect(DB_FILE)
                 cursor = conn.cursor()
-                cursor.execute("DELETE FROM rascunhos WHERE id = ?", (id_carregar,))
+                cursor.execute("DELETE FROM rascunhos WHERE id = ?", (id_rascunho,))
                 conn.commit()
                 conn.close()
-                st.success(f"Rascunho #{id_carregar} excluído!")
+                st.success(f"Rascunho #{id_rascunho} excluído!")
                 st.rerun()
     else:
         st.info("Nenhum rascunho pendente registrado.")
@@ -476,7 +575,6 @@ elif menu == "📅 Agenda de Atividades":
         df_agenda = pd.read_sql_query("SELECT id AS ID, task AS Tarefa, category AS Categoria, due_date AS 'Data Prevista', status AS Status FROM agenda ORDER BY due_date ASC", conn)
         conn.close()
 
-        # Seleção do Mês e Ano para visualização do Calendário
         col_m1, col_m2, col_m3 = st.columns([2, 2, 3])
         with col_m1:
             mes_sel = st.selectbox("Mês", list(range(1, 13)), index=datetime.now().month - 1)
@@ -488,27 +586,22 @@ elif menu == "📅 Agenda de Atividades":
         
         st.markdown(f"### 🗓️ {calendar.month_name[mes_sel].capitalize()} de {ano_sel}")
         
-        # Cabeçalho dos dias da semana
         cols_header = st.columns(7)
         for idx, dia_nome in enumerate(dias_semana):
             cols_header[idx].markdown(f"**{dia_nome}**")
 
         st.divider()
 
-        # Renderização da grade do calendário
         for semana in cal:
             cols_dia = st.columns(7)
             for idx_dia, dia_num in enumerate(semana):
                 with cols_dia[idx_dia]:
                     if dia_num != 0:
                         data_str = f"{ano_sel}-{mes_sel:02d}-{dia_num:02d}"
-                        
-                        # Destaca se for o dia de hoje
                         e_hoje = (data_str == datetime.now().strftime("%Y-%m-%d"))
                         label_dia = f"**{dia_num}** 📍" if e_hoje else f"**{dia_num}**"
                         st.markdown(label_dia)
 
-                        # Filtra tarefas do dia
                         if not df_agenda.empty:
                             tarefas_dia = df_agenda[df_agenda["Data Prevista"] == data_str]
                             for _, item in tarefas_dia.iterrows():
@@ -518,7 +611,6 @@ elif menu == "📅 Agenda de Atividades":
                     else:
                         st.write("")
 
-        # Tabela expansível abaixo do calendário para gestão rápida
         with st.expander("📋 Ver Lista Completa de Tarefas e Gerenciar Status"):
             if not df_agenda.empty:
                 st.dataframe(df_agenda, use_container_width=True)
