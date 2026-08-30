@@ -1181,8 +1181,7 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                         st.success(f"PDF '{archivo_enviado_cli.name}' enviado e salvo no histórico do cliente com sucesso!")
                         st.rerun()
                 # ==============================================================
-
-                historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
+historico_path = os.path.join(cliente_dir, "historico_atendimentos.json")
                 
                 st.subheader("📜 Histórico de Atendimentos, Chamados & Laudos")
                 if os.path.exists(historico_path):
@@ -1193,6 +1192,26 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                         hist_data = []
 
                     if hist_data:
+                        # Botão para remover duplicidades automaticamente
+                        if st.button("🧹 Remover Duplicidades do Histórico", key=f"btn_limpar_dup_{cli_selecionado}"):
+                            vistos = set()
+                            hist_limpo = []
+                            for item in hist_data:
+                                chave_unica = (
+                                    item.get("data", ""),
+                                    item.get("tipo", ""),
+                                    item.get("parecer", item.get("descricao", ""))
+                                )
+                                if chave_unica not in vistos:
+                                    vistos.add(chave_unica)
+                                    hist_limpo.append(item)
+                            
+                            with open(historico_path, "w", encoding="utf-8") as f_h_limpo:
+                                json.dump(hist_limpo, f_h_limpo, ensure_ascii=False, indent=4)
+                            
+                            st.success(f"Duplicidades removidas com sucesso! Total de registros limpos: {len(hist_limpo)}")
+                            st.rerun()
+
                         for idx_h, h_item in enumerate(reversed(hist_data)):
                             tipo_at = h_item.get("tipo", "Atendimento")
                             data_at = h_item.get("data", "")
@@ -1200,6 +1219,23 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                             obs_at = h_item.get("parecer", h_item.get("descricao", ""))
                             pdf_p = h_item.get("pdf_path", "")
 
+                            with st.expander(f"📌 [{data_at}] {tipo_at} — Status: {status_at}"):
+                                st.write(f"**Detalhes / Parecer:** {obs_at}")
+                                st.write(f"**Responsável Técnico / Usuário:** {h_item.get('resp_tecnico', h_item.get('usuario', 'Sistema'))}")
+                                
+                                if pdf_p and os.path.exists(pdf_p):
+                                    with open(pdf_p, "rb") as pdf_file_down:
+                                        st.download_button(
+                                            label="📥 Baixar / Visualizar PDF da Vistoria",
+                                            data=pdf_file_down.read(),
+                                            file_name=os.path.basename(pdf_p),
+                                            mime="application/pdf",
+                                            key=f"down_hist_pdf_{idx_h}_{cli_selecionado}"
+                                        )
+                    else:
+                        st.info("Nenhum registro no histórico deste cliente.")
+                else:
+                    st.info("Nenhum histórico gravado para este cliente até o momento.")
                             with st.expander(f"📌 [{data_at}] {tipo_at} — Status: {status_at}"):
                                 st.write(f"**Detalhes / Parecer:** {obs_at}")
                                 st.write(f"**Responsável Técnico / Usuário:** {h_item.get('resp_tecnico', h_item.get('usuario', 'Sistema'))}")
