@@ -209,7 +209,7 @@ if not st.session_state["logged_in"]:
     tela_login()
     st.stop()
 
-# --- FUNÇÃO GERADORA DE PDF COM TIPO DE VISITA DINÂMICO ---
+# --- FUNÇÃO GERADORA DE PDF COM TIPO DE VISITA E ASSINATURA AJUSTADOS ---
 def gerar_pdf_preventiva():
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -336,19 +336,21 @@ def gerar_pdf_preventiva():
     story.append(t_obs)
     story.append(Spacer(1, 15))
 
-    # 9. Bloco de Assinaturas (Técnico e Cliente)
+    # 9. Bloco de Assinaturas (Técnico e Cliente - Razão Social + CNPJ)
     story.append(Paragraph("<b>9. VALIDAÇÃO E ASSINATURAS DAS PARTES</b>", style_sec_header))
     story.append(Spacer(1, 20))
     
     nome_tecnico = st.session_state.get('resp_tecnico', empresa_db.get("resp_tecnico", "Eli Silva"))
     crea_tecnico = empresa_db.get("crea", "")
-    nome_cliente_rep = st.session_state.get('sindico', st.session_state.get('zelador', st.session_state.get('cliente', '')))
-    doc_cliente_rep = st.session_state.get('doc_representante', '')
+    
+    # Exibe a Razão Social do Cliente/Condomínio e o CNPJ no campo do cliente
+    razao_social_cliente = st.session_state.get('cliente', '')
+    cnpj_cliente = st.session_state.get('cnpj', '')
 
     assinaturas_data = [
         [
             Paragraph("__________________________________________<br/><b>RESPONSÁVEL TÉCNICO</b><br/>" + f"{nome_tecnico}<br/>CREA: {crea_tecnico}", style_center),
-            Paragraph("__________________________________________<br/><b>REPRESENTANTE / CLIENTE</b><br/>" + f"{nome_cliente_rep}<br/>CPF/RG: {doc_cliente_rep}", style_center)
+            Paragraph("__________________________________________<br/><b>REPRESENTANTE / CLIENTE</b><br/>" + f"{razao_social_cliente}<br/>CNPJ: {cnpj_cliente}", style_center)
         ]
     ]
     t_ass = Table(assinaturas_data, colWidths=[277, 277])
@@ -372,7 +374,7 @@ def gerar_pdf_preventiva():
 def inicializar_defaults():
     defaults = {
         "cliente": "", "cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP",
-        "sindico": "", "zelador": "", "contato": "", "email": "", "doc_representante": "",
+        "sindico": "", "zelador": "", "contato": "", "email": "",
         "data_visita": datetime.now().strftime("%Y-%m-%d"), "tipo_visita": "Preventiva Trimestral",
         "resp_tecnico": empresa_db.get("resp_tecnico", "Eli Silva"), "acompanhante": "",
         "status_geral": "CONFORME / SISTEMA OPERACIONAL", "central_sdai": "",
@@ -549,7 +551,7 @@ if menu == "📋 Nova Vistoria / Laudo":
     with col_a1:
         st.session_state["resp_tecnico"] = st.text_input("Responsável Técnico (Nome)", value=st.session_state["resp_tecnico"])
     with col_a2:
-        st.session_state["doc_representante"] = st.text_input("CPF ou RG do Cliente/Acompanhante", value=st.session_state["doc_representante"], placeholder="Ex: 000.000.000-00")
+        st.info("ℹ️ No PDF, a assinatura do cliente será gerada automaticamente com a Razão Social e o CNPJ informados no formulário.")
 
     st.divider()
     col_btn1, col_btn2 = st.columns(2)
