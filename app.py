@@ -138,7 +138,7 @@ def salvar_json(path, data):
 def enviar_email_novo_chamado(cliente, usuario, titulo, descricao, data_chamado):
     """Atribuição: Enviar notificação por e-mail para elisistemaspci@gmail.com quando um chamado for aberto."""
     remetente = "elisistemaspci@gmail.com"
-    senha_app = "SUA_SENHA_DE_APLICATIVO_DO_GMAIL"  # Configure aqui a Senha de Aplicativo do Gmail
+    senha_app = "sistemaseli321"  # Configure aqui a Senha de Aplicativo do Gmail
     destinatario = "elisistemaspci@gmail.com"
 
     assunto = f"⚡ Novo Chamado Técnico Registrado - {cliente}"
