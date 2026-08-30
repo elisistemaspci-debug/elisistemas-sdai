@@ -268,7 +268,6 @@ def verificar_credenciais(u_input, s_input):
         st.session_state["perfil"] = user_perfil
         st.session_state["cliente_vinculado"] = usuarios[u_input].get("cliente_vinculado", "")
         
-        # Define os módulos permitidos com base na configuração do usuário ou perfil padrão
         mod_user = usuarios[u_input].get("modulos_permitidos")
         if mod_user is not None and isinstance(mod_user, list) and len(mod_user) > 0:
             st.session_state["modulos_permitidos"] = mod_user
@@ -513,6 +512,44 @@ def gerar_pdf_preventiva():
 
     return pdf_data
 
+# ==============================================================================
+# 6. RESET E CALLBACKS DO FORMULÁRIO DE VISTORIA
+# ==============================================================================
+def limpar_formulario_vistoria():
+    """Atribuição: Limpar e resetar todos os campos do formulário para o estado padrão após gerar o PDF."""
+    defaults = {
+        "cliente": "", "cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP",
+        "sindico": "", "zelador": "", "contato": "", "email": "",
+        "data_visita": datetime.now().strftime("%Y-%m-%d"), "tipo_visita": "Preventiva Trimestral",
+        "resp_tecnico": empresa_db.get("resp_tecnico", "Eli Silva"), "acompanhante": "",
+        "status_geral": "CONFORME / SISTEMA OPERACIONAL", "central_sdai": "",
+        "tipo_central": "SISTEMA ENDEREÇÁVEL", "qtd_lacos": "", "det_fumaca": "",
+        "acionadores": "", "avisadores": "", "pressurizacao": "Sim",
+        "tensao_baterias": "24 Vcc", "parecer": "", "orientacoes": "", "fotos_detalhes": [],
+        "cli_sel_key": "-- Selecionar Cliente Cadastrado --"
+    }
+    for k, v in defaults.items():
+        st.session_state[k] = v
+
+    for sec_key in ITENS_SECOES:
+        for idx, _ in enumerate(ITENS_SECOES[sec_key]):
+            st.session_state[f"{sec_key}_{idx}_val"] = ""
+            st.session_state[f"{sec_key}_{idx}_obs"] = ""
+            st.session_state[f"{sec_key}_{idx}_status"] = "CONFORME"
+
+def carregar_dados_cliente_selecionado():
+    """Atribuição: Atualizar dinamicamente todos os campos da tela ao trocar o cliente no selectbox."""
+    cli_sel = st.session_state.get("cli_sel_key", "-- Selecionar Cliente Cadastrado --")
+    if cli_sel != "-- Selecionar Cliente Cadastrado --" and cli_sel in clientes_db:
+        info_c = clientes_db[cli_sel]
+        st.session_state["cliente"] = cli_sel
+        st.session_state["cnpj"] = info_c.get("cnpj", "")
+        st.session_state["endereco"] = info_c.get("endereco", "")
+        st.session_state["sindico"] = info_c.get("sindico", "")
+        st.session_state["zelador"] = info_c.get("zelador", "")
+        st.session_state["contato"] = info_c.get("telefone", "")
+        st.session_state["email"] = info_c.get("email", "")
+
 def inicializar_defaults():
     defaults = {
         "cliente": "", "cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP",
@@ -522,7 +559,8 @@ def inicializar_defaults():
         "status_geral": "CONFORME / SISTEMA OPERACIONAL", "central_sdai": "",
         "tipo_central": "SISTEMA ENDEREÇÁVEL", "qtd_lacos": "", "det_fumaca": "",
         "acionadores": "", "avisadores": "", "pressurizacao": "Sim",
-        "tensao_baterias": "24 Vcc", "parecer": "", "orientacoes": "", "fotos_detalhes": []
+        "tensao_baterias": "24 Vcc", "parecer": "", "orientacoes": "", "fotos_detalhes": [],
+        "cli_sel_key": "-- Selecionar Cliente Cadastrado --"
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -540,7 +578,7 @@ def inicializar_defaults():
 inicializar_defaults()
 
 # ==============================================================================
-# 6. NAVEGAÇÃO E INTERFACE LATERAL COM FILTRO RBAC
+# 7. NAVEGAÇÃO E INTERFACE LATERAL COM FILTRO RBAC
 # ==============================================================================
 with st.sidebar:
     st.title("⚡ Eli Sistemas")
@@ -556,7 +594,6 @@ with st.sidebar:
         
     st.divider()
 
-    # Filtra as opções do menu conforme permissão do usuário
     if st.session_state["perfil"] == "master":
         opcoes_menu = TODOS_MODULOS
     else:
@@ -567,21 +604,26 @@ with st.sidebar:
     menu = st.radio("Navegação Principal", opcoes_menu)
 
 # ==============================================================================
-# 7. ROTINAS DE PÁGINAS DO MENU
+# 8. ROTINAS DE PÁGINAS DO MENU
 # ==============================================================================
 
 if menu == "📋 Nova Vistoria / Laudo":
     st.header("📋 Emissão de Relatório / Vistoria Preventiva")
     
+    # Selectbox com carregamento dinâmico e atualização automática dos campos
     if clientes_db:
         clientes_ativos = {k: v for k, v in clientes_db.items() if v.get("ativo", True)}
         lista_cli = ["-- Selecionar Cliente Cadastrado --"] + sorted(list(clientes_ativos.keys()))
-        cli_sel = st.selectbox("Carregar Dados de Cliente Existente", lista_cli)
-        if cli_sel != "-- Selecionar Cliente Cadastrado --":
-            info_c = clientes_ativos[cli_sel]
-            st.session_state["cliente"] = cli_sel
-            st.session_state["cnpj"] = info_c.get("cnpj", "")
-            st.session_state["endereco"] = info_c.get("endereco", "")
+        
+        if "cli_sel_key" not in st.session_state:
+            st.session_state["cli_sel_key"] = "-- Selecionar Cliente Cadastrado --"
+            
+        st.selectbox(
+            "Carregar Dados de Cliente Existente", 
+            lista_cli, 
+            key="cli_sel_key", 
+            on_change=carregar_dados_cliente_selecionado
+        )
 
     st.subheader("1. Dados Gerais da Edificação")
     col1, col2 = st.columns(2)
@@ -713,9 +755,22 @@ if menu == "📋 Nova Vistoria / Laudo":
 
     with col_btn2:
         if st.button("📄 Gerar e Salvar PDF do Relatório", type="primary"):
-            pdf_bytes = gerar_pdf_preventiva()
-            st.success("Relatório gerado com fotos e campo de assinaturas!")
-            st.download_button("💾 Baixar Relatório PDF Completo", pdf_bytes, file_name=f"Vistoria_{st.session_state['cliente']}.pdf", mime="application/pdf")
+            if not st.session_state["cliente"]:
+                st.error("Preencha o nome do cliente antes de gerar o PDF.")
+            else:
+                pdf_bytes = gerar_pdf_preventiva()
+                st.success("Relatório PDF gerado com sucesso!")
+                
+                st.download_button(
+                    "💾 Baixar Relatório PDF Completo", 
+                    pdf_bytes, 
+                    file_name=f"Vistoria_{st.session_state['cliente']}.pdf", 
+                    mime="application/pdf"
+                )
+                
+                # Reseta automaticamente todos os campos da tela e volta o selectbox para o padrão
+                limpar_formulario_vistoria()
+                st.info("🔄 Formulário limpo! Selecione um novo cliente para iniciar a próxima vistoria.")
 
 elif menu == "📂 Rascunhos de Vistoria":
     st.header("📂 Rascunhos de Vistoria")
@@ -1107,12 +1162,10 @@ elif menu == "👥 Gestão de Usuários":
             st.divider()
             st.write("🔑 **Marque abaixo quais telas este usuário poderá acessar:**")
             
-            # Checkbox individual por funcionalidade
             modulos_selecionados = []
             cols_mod = st.columns(3)
             for idx_m, mod_nome in enumerate(TODOS_MODULOS):
                 with cols_mod[idx_m % 3]:
-                    # Padrão marcado para Master
                     padrao_chk = True if novo_p == "master" else (mod_nome in permissoes_perfis.get(novo_p, []))
                     if st.checkbox(mod_nome, value=padrao_chk, key=f"chk_m_{idx_m}"):
                         modulos_selecionados.append(mod_nome)
@@ -1172,7 +1225,6 @@ elif menu == "🎫 Chamados Técnicos":
     st.header("🎫 Chamados Técnicos & Atendimento")
     
     with st.form("form_chamado"):
-        # Se for cliente vinculado, auto-seleciona a empresa dele
         if st.session_state["cliente_vinculado"]:
             cli_chamado = st.session_state["cliente_vinculado"]
             st.info(f"Abridor de Chamado Vinculado a: **{cli_chamado}**")
@@ -1202,7 +1254,6 @@ elif menu == "🎫 Chamados Técnicos":
     st.subheader("Chamados Registrados")
     if chamados_db:
         df_chamados = pd.DataFrame(chamados_db)
-        # Se for cliente, exibe somente os chamados da empresa dele
         if st.session_state["perfil"] == "cliente" and st.session_state["cliente_vinculado"]:
             df_chamados = df_chamados[df_chamados["cliente"] == st.session_state["cliente_vinculado"]]
             
