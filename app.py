@@ -138,7 +138,7 @@ def salvar_json(path, data):
 def enviar_email_novo_chamado(cliente, usuario, titulo, descricao, data_chamado):
     """Atribuição: Enviar notificação por e-mail para elisistemaspci@gmail.com quando um chamado for aberto."""
     remetente = "elisistemaspci@gmail.com"
-    senha_app = "sistemaseli321"  # Configure aqui a Senha de Aplicativo do Gmail
+    senha_app = "SUA_SENHA_DE_APLICATIVO_DO_GMAIL"  # Insira aqui a Senha de Aplicativo de 16 dígitos do Gmail
     destinatario = "elisistemaspci@gmail.com"
 
     assunto = f"⚡ Novo Chamado Técnico Registrado - {cliente}"
@@ -218,7 +218,7 @@ empresa_db = carregar_json(EMPRESA_FILE, {
 })
 chamados_db = carregar_json(CHAMADOS_FILE, [])
 usuarios = carregar_json(USUARIOS_FILE, {
-    "admin": {"senha": "123", "nome": "Eli Silva", "perfil": "master", "cliente_vinculado": ""}
+    "admin": {"senha": "sistemaseli321", "nome": "Eli Silva", "perfil": "master", "cliente_vinculado": ""}
 })
 
 ITENS_SECOES = {
@@ -1155,7 +1155,7 @@ elif menu == "🎫 Chamados Técnicos":
                 chamados_db.append(novo_chamado)
                 salvar_json(CHAMADOS_FILE, chamados_db)
                 
-                # Disparo do e-mail de notificação para elisistemaspci@gmail.com
+                # Disparo automático de e-mail para elisistemaspci@gmail.com
                 email_enviado = enviar_email_novo_chamado(
                     cli_chamado, 
                     st.session_state["user"], 
@@ -1165,9 +1165,9 @@ elif menu == "🎫 Chamados Técnicos":
                 )
                 
                 if email_enviado:
-                    st.success("Chamado registrado e e-mail de notificação enviado com sucesso para elisistemaspci@gmail.com!")
+                    st.success("Chamado registrado no aplicativo e e-mail enviado com sucesso para elisistemaspci@gmail.com!")
                 else:
-                    st.warning("Chamado registrado no sistema, mas houve uma falha ao enviar o e-mail de alerta.")
+                    st.warning("Chamado registrado no aplicativo, mas houve uma falha ao enviar o e-mail de alerta.")
                 
                 st.rerun()
             else:
