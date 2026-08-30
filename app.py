@@ -747,7 +747,7 @@ elif menu == "📊 Controle de Vencimentos":
 
     col_st1, col_st2, col_st3 = st.columns(3)
     col_st1.metric("🔴 Vencidos (Urgente)", total_vencidos)
-    col_st2.metric("🟡 Vencem em até 30 Dias (Ligar)", total_alerta)
+    col_st2.metric("🟡 Vence em até 30 Dias (Ligar)", total_alerta)
     col_st3.metric("🏢 Clientes Cadastrados no Controle", len(vencimentos_db))
 
     st.divider()
@@ -957,19 +957,37 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
     
     with tab_c2:
         st.subheader("Cadastrar ou Editar Cliente")
+        
+        # Seleção de modo: Novo Cliente vs Editar Cliente Existente
+        modo_cliente = st.radio("Selecione a Ação", ["Novo Cliente", "Editar Cliente Existente"], horizontal=True)
+        
+        cli_edit_sel = None
+        dados_cli_atual = {"cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP", "sindico": "", "zelador": "", "telefone": "", "email": "", "ativo": True}
+        
+        if modo_cliente == "Editar Cliente Existente" and clientes_db:
+            cli_edit_sel = st.selectbox("Selecione o Cliente para Editar", sorted(list(clientes_db.keys())))
+            if cli_edit_sel:
+                dados_cli_atual = clientes_db[cli_edit_sel]
+        
         with st.form("form_novo_cliente"):
-            nome_cli = st.text_input("Nome do Cliente / Condomínio")
-            cnpj_cli = st.text_input("CNPJ")
-            end_cli = st.text_input("Endereço")
-            cid_cli = st.text_input("Cidade / UF", value="Ribeirão Preto - SP")
-            sindico_cli = st.text_input("Síndico")
-            zelador_cli = st.text_input("Zelador")
-            tel_cli = st.text_input("Telefone")
-            email_cli = st.text_input("E-mail")
+            if modo_cliente == "Novo Cliente":
+                nome_cli = st.text_input("Nome do Cliente / Condomínio")
+            else:
+                st.text(f"Editando Cliente: {cli_edit_sel}")
+                nome_cli = cli_edit_sel  # Mantém o nome fixo ou chave primária
+                
+            cnpj_cli = st.text_input("CNPJ", value=dados_cli_atual.get("cnpj", ""))
+            end_cli = st.text_input("Endereço", value=dados_cli_atual.get("endereco", ""))
+            cid_cli = st.text_input("Cidade / UF", value=dados_cli_atual.get("cidade_uf", "Ribeirão Preto - SP"))
+            sindico_cli = st.text_input("Síndico", value=dados_cli_atual.get("sindico", ""))
+            zelador_cli = st.text_input("Zelador", value=dados_cli_atual.get("zelador", ""))
+            tel_cli = st.text_input("Telefone", value=dados_cli_atual.get("telefone", ""))
+            email_cli = st.text_input("E-mail", value=dados_cli_atual.get("email", ""))
             
             if st.form_submit_button("💾 Salvar / Atualizar Cliente"):
                 if nome_cli:
                     nome_formatado = nome_cli.strip().upper()
+                    # Se for alteração e o nome mudou ou se for novo
                     clientes_db[nome_formatado] = {
                         "cnpj": cnpj_cli,
                         "endereco": end_cli,
@@ -978,10 +996,10 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                         "zelador": zelador_cli,
                         "telefone": tel_cli,
                         "email": email_cli,
-                        "ativo": True
+                        "ativo": dados_cli_atual.get("ativo", True)
                     }
                     salvar_json(CLIENTES_FILE, clientes_db)
-                    st.success(f"Cliente '{nome_formatado}' gravado com sucesso!")
+                    st.success(f"Cliente '{nome_formatado}' salvo/atualizado com sucesso!")
                     st.rerun()
                 else:
                     st.error("Informe o nome do cliente.")
