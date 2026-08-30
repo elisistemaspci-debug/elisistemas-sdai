@@ -14,10 +14,11 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-# 1. Configuração da Página
+# ==============================================================================
+# 1. CONFIGURAÇÃO DA PÁGINA E ATRIBUIÇÃO DE DIRETÓRIOS/ARQUIVOS
+# ==============================================================================
 st.set_page_config(page_title="Eli Sistemas - Gestão, Inspeção Técnica e Chamados", page_icon="⚡", layout="wide")
 
-# --- DIRETÓRIOS E ARQUIVOS ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in locals() else "."
 DB_FILE = os.path.join(BASE_DIR, "eli_sistemas.db")
 CLIENTES_FILE = os.path.join(BASE_DIR, "clientes.json")
@@ -34,8 +35,11 @@ os.makedirs(PASTA_FOTOS_VISTORIA, exist_ok=True)
 os.makedirs(HISTORICO_CLIENTES_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
-# --- INICIALIZAÇÃO DO BANCO SQLITE ---
+# ==============================================================================
+# 2. GESTÃO DO BANCO DE DADOS SQLITE & BACKUPS
+# ==============================================================================
 def init_db():
+    """Atribuição: Inicializar tabelas relacionais do SQLite para relatórios, agenda e rascunhos."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('''
@@ -47,10 +51,7 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS agenda (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task TEXT,
-            category TEXT,
-            due_date TEXT,
-            status TEXT
+            task TEXT, category TEXT, due_date TEXT, status TEXT
         )
     ''')
     cursor.execute('''
@@ -64,8 +65,8 @@ def init_db():
 
 init_db()
 
-# --- SISTEMA DE BACKUP COMPLETO ---
 def perform_backup_completo():
+    """Atribuição: Compactar 100% da base SQLite, arquivos JSON e fotos em um pacote ZIP."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     zip_filename = f"backup_completo_elisistemas_{timestamp}.zip"
     zip_path = os.path.join(BACKUP_DIR, zip_filename)
@@ -90,6 +91,7 @@ def perform_backup_completo():
         return f.read(), zip_filename
 
 def restaurar_backup_completo(uploaded_file):
+    """Atribuição: Descompactar pacote ZIP e restaurar a estrutura completa de arquivos do sistema."""
     if uploaded_file is not None:
         temp_zip_path = os.path.join(BASE_DIR, "temp_restore.zip")
         with open(temp_zip_path, "wb") as f:
@@ -108,7 +110,9 @@ def restaurar_backup_completo(uploaded_file):
             return False
     return False
 
-# --- CARREGAMENTO E SALVAMENTO JSON ---
+# ==============================================================================
+# 3. GESTÃO DE PERSISTÊNCIA JSON E HISTÓRICO
+# ==============================================================================
 @st.cache_data
 def carregar_json_cached(path):
     if os.path.exists(path):
@@ -129,6 +133,7 @@ def salvar_json(path, data):
     carregar_json_cached.clear()
 
 def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict):
+    """Atribuição: Gravar log contínuo de atendimentos na pasta individual do cliente."""
     if not nome_cliente:
         return
     nome_pasta_cliente = "".join(c for c in nome_cliente.strip() if c.isalnum() or c in (' ', '_', '-')).strip()
@@ -154,12 +159,12 @@ def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict):
     with open(historico_path, "w", encoding="utf-8") as f_hist:
         json.dump(historico_lista, f_hist, ensure_ascii=False, indent=4)
 
+# Carregamento inicial de bases
 clientes_db = carregar_json(CLIENTES_FILE, {})
 if not isinstance(clientes_db, dict):
     clientes_db = {}
 
 vencimentos_db = carregar_json(VENCIMENTOS_FILE, {})
-
 empresa_db = carregar_json(EMPRESA_FILE, {
     "nome": "ELI SISTEMAS PROTEÇÃO CONTRA INCÊNDIO",
     "cnpj": "68.440.457/0001-50",
@@ -169,7 +174,6 @@ empresa_db = carregar_json(EMPRESA_FILE, {
     "endereco": "Rua Floriano Peixoto, 122 - Sala 02 - Centro",
     "resp_tecnico": "Eli Silva"
 })
-
 chamados_db = carregar_json(CHAMADOS_FILE, [])
 usuarios = carregar_json(USUARIOS_FILE, {
     "admin": {"senha": "123", "nome": "Eli Silva", "perfil": "master", "cliente_vinculado": ""}
@@ -202,8 +206,8 @@ ITENS_SECOES = {
     ]
 }
 
-# --- HELPER DE STATUS DE VENCIMENTO ---
 def calcular_status_vencimento(data_str):
+    """Atribuição: Calcular diferença de dias até o vencimento e retornar rotulo com alerta (30 dias)."""
     if not data_str or data_str == "N/A":
         return "⚪ Não Informado", "gray"
     try:
@@ -220,7 +224,9 @@ def calcular_status_vencimento(data_str):
     except Exception:
         return "⚪ Data Inválida", "gray"
 
-# --- GERENCIAMENTO DE AUTENTICAÇÃO ---
+# ==============================================================================
+# 4. GERENCIAMENTO DE SESSÃO E AUTENTICAÇÃO
+# ==============================================================================
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 if "user" not in st.session_state:
@@ -261,8 +267,67 @@ if not st.session_state["logged_in"]:
     tela_login()
     st.stop()
 
-# --- FUNÇÃO GERADORA DE PDF ---
+# ==============================================================================
+# 5. GERADORES DE RELATÓRIOS PDF (REPORTLAB)
+# ==============================================================================
+def gerar_pdf_vencimentos(vencimentos_data):
+    """Atribuição: Gerar o documento PDF da tabela de controle de vencimentos para impressão."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+    story = []
+    styles = getSampleStyleSheet()
+
+    style_title = ParagraphStyle('TitlePDF', parent=styles['Normal'], fontSize=12, leading=14, fontName='Helvetica-Bold', textColor=colors.navy)
+    style_sub = ParagraphStyle('SubPDF', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.dimgrey)
+    style_cel = ParagraphStyle('CelTab', parent=styles['Normal'], fontSize=7, leading=8)
+    style_cel_bold = ParagraphStyle('CelTabBold', parent=styles['Normal'], fontSize=7, leading=8, fontName='Helvetica-Bold')
+
+    story.append(Paragraph(f"<b>{empresa_db.get('nome', 'ELI SISTEMAS')}</b>", style_title))
+    story.append(Paragraph(f"CNPJ: {empresa_db.get('cnpj', '')} | Tel: {empresa_db.get('telefone', '')} | E-mail: {empresa_db.get('email', '')}", style_sub))
+    story.append(Paragraph(f"<b>RELATÓRIO DE CONTROLE DE VENCIMENTOS & PREVENTIVAS</b> - Emitido em: {datetime.now().strftime('%d/%m/%Y')}", style_sub))
+    story.append(Spacer(1, 10))
+
+    cabecalho = [
+        Paragraph("<b>Cliente</b>", style_cel_bold),
+        Paragraph("<b>Detecção</b>", style_cel_bold),
+        Paragraph("<b>Extintores</b>", style_cel_bold),
+        Paragraph("<b>Mangueiras</b>", style_cel_bold),
+        Paragraph("<b>AVCB</b>", style_cel_bold),
+        Paragraph("<b>Observação</b>", style_cel_bold)
+    ]
+    
+    tabela_pdf = [cabecalho]
+
+    for cli, d in vencimentos_data.items():
+        st_det, _ = calcular_status_vencimento(d.get("deteccao", ""))
+        st_ext, _ = calcular_status_vencimento(d.get("extintores", ""))
+        st_man, _ = calcular_status_vencimento(d.get("mangueiras", ""))
+        st_avcb, _ = calcular_status_vencimento(d.get("avcb", ""))
+
+        tabela_pdf.append([
+            Paragraph(f"<b>{cli}</b>", style_cel),
+            Paragraph(f"{d.get('deteccao', 'N/A')}<br/>{st_det}", style_cel),
+            Paragraph(f"{d.get('extintores', 'N/A')}<br/>{st_ext}", style_cel),
+            Paragraph(f"{d.get('mangueiras', 'N/A')}<br/>{st_man}", style_cel),
+            Paragraph(f"{d.get('avcb', 'N/A')}<br/>{st_avcb}", style_cel),
+            Paragraph(d.get("obs", ""), style_cel)
+        ])
+
+    t_venc = Table(tabela_pdf, colWidths=[110, 80, 80, 80, 80, 125])
+    t_venc.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke),
+        ('BOX', (0,0), (-1,-1), 0.5, colors.grey),
+        ('INNERGRID', (0,0), (-1,-1), 0.25, colors.lightgrey),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE')
+    ]))
+
+    story.append(t_venc)
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
 def gerar_pdf_preventiva():
+    """Atribuição: Compilar dados técnicos e fotos da vistoria em PDF formatado conforme NBRs."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
     story = []
@@ -388,7 +453,6 @@ def gerar_pdf_preventiva():
     
     nome_tecnico = st.session_state.get('resp_tecnico', empresa_db.get("resp_tecnico", "Eli Silva"))
     crea_tecnico = empresa_db.get("crea", "")
-    
     razao_social_cliente = st.session_state.get('cliente', '')
     cnpj_cliente = st.session_state.get('cnpj', '')
 
@@ -442,7 +506,9 @@ def inicializar_defaults():
 
 inicializar_defaults()
 
-# --- BARRA LATERAL ---
+# ==============================================================================
+# 6. NAVEGAÇÃO E INTERFACE LATERAL
+# ==============================================================================
 with st.sidebar:
     st.title("⚡ Eli Sistemas")
     st.write(f"👤 Usuário: **{st.session_state['user']}** ({st.session_state['perfil'].upper()})")
@@ -473,7 +539,9 @@ with st.sidebar:
         
     menu = st.radio("Navegação Principal", opcoes_menu)
 
-# --- CORPO DAS PÁGINAS ---
+# ==============================================================================
+# 7. ROTINAS DE PÁGINAS DO MENU
+# ==============================================================================
 
 if menu == "📋 Nova Vistoria / Laudo":
     st.header("📋 Emissão de Relatório / Vistoria Preventiva")
@@ -664,7 +732,6 @@ elif menu == "📊 Controle de Vencimentos":
     st.header("📊 Controle de Vencimentos & Oportunidades de Orçamento")
     st.info("💡 **Aviso Automático de 30 Dias:** As células ganham destaque em amarelo quando estiverem a 1 mês do vencimento (ideal para ligar e ofertar orçamento) e em vermelho caso já estejam vencidas.")
 
-    # Estatísticas de Alertas
     total_vencidos = 0
     total_alerta = 0
 
@@ -754,9 +821,19 @@ elif menu == "📊 Controle de Vencimentos":
                 })
 
             df_venc = pd.DataFrame(lista_tabela)
-            st.dataframe(df_venc, use_container_width=True, height=400)
+            st.dataframe(df_venc, use_container_width=True, height=350)
 
-            # Opção para excluir um registro
+            col_pdf1, col_pdf2 = st.columns([3, 1])
+            with col_pdf2:
+                pdf_venc_bytes = gerar_pdf_vencimentos(vencimentos_db)
+                st.download_button(
+                    label="🖨️ Imprimir / Baixar Relatório PDF",
+                    data=pdf_venc_bytes,
+                    file_name=f"Relatorio_Vencimentos_{datetime.now().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf",
+                    type="primary"
+                )
+
             with st.expander("🗑️ Excluir Cliente do Controle de Vencimentos"):
                 cli_del_v = st.selectbox("Selecione o Cliente para Remover", sorted(list(vencimentos_db.keys())))
                 if st.button("Remover Registro"):
