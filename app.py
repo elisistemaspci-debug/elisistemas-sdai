@@ -6,9 +6,6 @@ import shutil
 import hashlib
 import calendar
 import zipfile
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 import streamlit as st
 import pandas as pd
@@ -114,7 +111,7 @@ def restaurar_backup_completo(uploaded_file):
     return False
 
 # ==============================================================================
-# 3. GESTÃO DE PERSISTÊNCIA JSON, HISTÓRICO E NOTIFICAÇÃO DE E-MAIL
+# 3. GESTÃO DE PERSISTÊNCIA JSON E HISTÓRICO
 # ==============================================================================
 @st.cache_data
 def carregar_json_cached(path):
@@ -134,45 +131,6 @@ def salvar_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
     carregar_json_cached.clear()
-
-def enviar_email_novo_chamado(cliente, usuario, titulo, descricao, data_chamado):
-    """Atribuição: Enviar notificação por e-mail para elisistemaspci@gmail.com quando um chamado for aberto."""
-    remetente = "elisistemaspci@gmail.com"
-    senha_app = "sistemaseli321"  # Insira aqui a Senha de Aplicativo de 16 dígitos do Gmail
-    destinatario = "elisistemaspci@gmail.com"
-
-    assunto = f"⚡ Novo Chamado Técnico Registrado - {cliente}"
-    corpo = f"""
-    Um novo chamado técnico foi aberto no sistema Eli Sistemas:
-
-    - Cliente / Condomínio: {cliente}
-    - Usuário Responsável: {usuario}
-    - Título: {titulo}
-    - Data/Hora: {data_chamado}
-    
-    Descrição do Problema:
-    {descricao}
-
-    ---
-    E-mail automático gerado pelo sistema Eli Sistemas.
-    """
-
-    msg = MIMEMultipart()
-    msg["From"] = remetente
-    msg["To"] = destinatario
-    msg["Subject"] = assunto
-    msg.attach(MIMEText(corpo, "plain", "utf-8"))
-
-    try:
-        servidor = smtplib.SMTP("smtp.gmail.com", 587)
-        servidor.starttls()
-        servidor.login(remetente, senha_app)
-        servidor.sendmail(remetente, destinatario, msg.as_string())
-        servidor.quit()
-        return True
-    except Exception as e:
-        print(f"Erro ao enviar e-mail: {e}")
-        return False
 
 def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict):
     """Atribuição: Gravar log contínuo de atendimentos na pasta individual do cliente."""
@@ -218,7 +176,7 @@ empresa_db = carregar_json(EMPRESA_FILE, {
 })
 chamados_db = carregar_json(CHAMADOS_FILE, [])
 usuarios = carregar_json(USUARIOS_FILE, {
-    "admin": {"senha": "sistemaseli321", "nome": "Eli Silva", "perfil": "master", "cliente_vinculado": ""}
+    "admin": {"senha": "123", "nome": "Eli Silva", "perfil": "master", "cliente_vinculado": ""}
 })
 
 ITENS_SECOES = {
@@ -772,7 +730,7 @@ elif menu == "📂 Rascunhos de Vistoria":
 
 elif menu == "📊 Controle de Vencimentos":
     st.header("📊 Controle de Vencimentos & Oportunidades de Orçamento")
-    st.info("💡 **Aviso Automático de 30 Dias:** As células ganham destaque em amarelo quando estiverem a 1 mês do vencimento (ideal para ligar e ofertar orçamento) e enegrecidas/vermelhas caso já estejam vencidas.")
+    st.info("💡 **Aviso Automático de 30 Dias:** As células ganham destaque em amarelo quando estiverem a 1 mês do vencimento (ideal para ligar e ofertar orçamento) e em vermelho caso já estejam vencidas.")
 
     total_vencidos = 0
     total_alerta = 0
@@ -789,7 +747,7 @@ elif menu == "📊 Controle de Vencimentos":
 
     col_st1, col_st2, col_st3 = st.columns(3)
     col_st1.metric("🔴 Vencidos (Urgente)", total_vencidos)
-    col_st2.metric("🟡 Vence em até 30 Dias (Ligar)", total_alerta)
+    col_st2.metric("🟡 Vencem em até 30 Dias (Ligar)", total_alerta)
     col_st3.metric("🏢 Clientes Cadastrados no Controle", len(vencimentos_db))
 
     st.divider()
@@ -999,31 +957,15 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
     
     with tab_c2:
         st.subheader("Cadastrar ou Editar Cliente")
-        
-        modo_cliente = st.radio("Selecione a Ação", ["Novo Cliente", "Editar Cliente Existente"], horizontal=True)
-        
-        cli_edit_sel = None
-        dados_cli_atual = {"cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP", "sindico": "", "zelador": "", "telefone": "", "email": "", "ativo": True}
-        
-        if modo_cliente == "Editar Cliente Existente" and clientes_db:
-            cli_edit_sel = st.selectbox("Selecione o Cliente para Editar", sorted(list(clientes_db.keys())))
-            if cli_edit_sel:
-                dados_cli_atual = clientes_db[cli_edit_sel]
-        
         with st.form("form_novo_cliente"):
-            if modo_cliente == "Novo Cliente":
-                nome_cli = st.text_input("Nome do Cliente / Condomínio")
-            else:
-                st.text(f"Editando Cliente: {cli_edit_sel}")
-                nome_cli = cli_edit_sel
-                
-            cnpj_cli = st.text_input("CNPJ", value=dados_cli_atual.get("cnpj", ""))
-            end_cli = st.text_input("Endereço", value=dados_cli_atual.get("endereco", ""))
-            cid_cli = st.text_input("Cidade / UF", value=dados_cli_atual.get("cidade_uf", "Ribeirão Preto - SP"))
-            sindico_cli = st.text_input("Síndico", value=dados_cli_atual.get("sindico", ""))
-            zelador_cli = st.text_input("Zelador", value=dados_cli_atual.get("zelador", ""))
-            tel_cli = st.text_input("Telefone", value=dados_cli_atual.get("telefone", ""))
-            email_cli = st.text_input("E-mail", value=dados_cli_atual.get("email", ""))
+            nome_cli = st.text_input("Nome do Cliente / Condomínio")
+            cnpj_cli = st.text_input("CNPJ")
+            end_cli = st.text_input("Endereço")
+            cid_cli = st.text_input("Cidade / UF", value="Ribeirão Preto - SP")
+            sindico_cli = st.text_input("Síndico")
+            zelador_cli = st.text_input("Zelador")
+            tel_cli = st.text_input("Telefone")
+            email_cli = st.text_input("E-mail")
             
             if st.form_submit_button("💾 Salvar / Atualizar Cliente"):
                 if nome_cli:
@@ -1036,10 +978,10 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                         "zelador": zelador_cli,
                         "telefone": tel_cli,
                         "email": email_cli,
-                        "ativo": dados_cli_atual.get("ativo", True)
+                        "ativo": True
                     }
                     salvar_json(CLIENTES_FILE, clientes_db)
-                    st.success(f"Cliente '{nome_formatado}' salvo/atualizado com sucesso!")
+                    st.success(f"Cliente '{nome_formatado}' gravado com sucesso!")
                     st.rerun()
                 else:
                     st.error("Informe o nome do cliente.")
@@ -1143,39 +1085,70 @@ elif menu == "🎫 Chamados Técnicos":
         
         if st.form_submit_button("📩 ABRIR CHAMADO", type="primary"):
             if titulo_ch and desc_ch:
-                data_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                novo_chamado = {
+                chamados_db.append({
                     "usuario": st.session_state["user"],
                     "cliente": cli_chamado,
                     "titulo": titulo_ch,
                     "descricao": desc_ch,
-                    "data": data_atual,
+                    "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "status": "Aberto"
-                }
-                chamados_db.append(novo_chamado)
+                })
                 salvar_json(CHAMADOS_FILE, chamados_db)
-                
-                # Disparo automático de e-mail para elisistemaspci@gmail.com
-                email_enviado = enviar_email_novo_chamado(
-                    cli_chamado, 
-                    st.session_state["user"], 
-                    titulo_ch, 
-                    desc_ch, 
-                    data_atual
-                )
-                
-                if email_enviado:
-                    st.success("Chamado registrado no aplicativo e e-mail enviado com sucesso para elisistemaspci@gmail.com!")
-                else:
-                    st.warning("Chamado registrado no aplicativo, mas houve uma falha ao enviar o e-mail de alerta.")
-                
+                st.success("Chamado registrado com sucesso!")
                 st.rerun()
             else:
                 st.error("Preencha o título e a descrição.")
 
     st.subheader("Chamados Registrados")
+    
+    # Carrega os chamados via DataFrame do JSON salvo ou convertendo a lista existente
     if chamados_db:
-        st.dataframe(pd.DataFrame(chamados_db), use_container_width=True)
+        df_chamados = pd.DataFrame(chamados_db)
+        # Garante a coluna de ID para referência
+        df_chamados.insert(0, "id", range(len(df_chamados)))
+        
+        st.info("💡 Clique na coluna **status** de qualquer chamado para alternar entre **Aberto**, **Pendente** ou **Finalizado**, e depois clique no botão abaixo para salvar.")
+        
+        # Editor interativo para alterar o status na tabela
+        df_editado = st.data_editor(
+            df_chamados,
+            column_config={
+                "status": st.column_config.SelectboxColumn(
+                    "Status",
+                    help="Selecione o novo status do chamado",
+                    options=["Aberto", "Pendente", "Finalizado"],
+                    required=True,
+                ),
+                "id": st.column_config.NumberColumn("ID", disabled=True),
+                "usuario": st.column_config.TextColumn("Usuário", disabled=True),
+                "cliente": st.column_config.TextColumn("Cliente", disabled=True),
+                "titulo": st.column_config.TextColumn("Título", disabled=True),
+                "descricao": st.column_config.TextColumn("Descrição", disabled=True),
+                "data": st.column_config.TextColumn("Data", disabled=True),
+            },
+            disabled=["id", "usuario", "cliente", "titulo", "descricao", "data"],
+            hide_index=True,
+            key="tabela_status_chamados"
+        )
+
+        # Botão para salvar as alterações de status na lista e persistir no JSON
+        if st.button("Salvar Alterações de Status"):
+            novos_dados = []
+            for _, linha in df_editado.iterrows():
+                novos_dados.append({
+                    "usuario": linha["usuario"],
+                    "cliente": linha["cliente"],
+                    "titulo": linha["titulo"],
+                    "descricao": linha["descricao"],
+                    "data": linha["data"],
+                    "status": linha["status"]
+                })
+            
+            global chamados_db
+            chamados_db = novos_dados
+            salvar_json(CHAMADOS_FILE, chamados_db)
+            st.success("Status atualizados com sucesso!")
+            st.rerun()
     else:
         st.info("Nenhum chamado aberto até o momento.")
 
