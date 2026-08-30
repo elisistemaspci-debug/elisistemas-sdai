@@ -46,7 +46,12 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS agenda (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task TEXT, category TEXT, due_date TEXT, status TEXT, ativo INTEGER DEFAULT 1
+            task TEXT NOT NULL,
+            category TEXT,
+            due_date TEXT,
+            status TEXT DEFAULT 'Pendente',
+            observacoes TEXT,
+            ativo INTEGER DEFAULT 1
         )
     ''')
     cursor.execute('''
@@ -463,7 +468,6 @@ if menu == "📋 Nova Vistoria / Laudo":
     st.header("📋 Emissão de Relatório / Vistoria Preventiva")
     
     if clientes_db:
-        # Filtra apenas clientes ativos para seleção rápida
         clientes_ativos = {k: v for k, v in clientes_db.items() if v.get("ativo", True)}
         lista_cli = ["-- Selecionar Cliente Cadastrado --"] + sorted(list(clientes_ativos.keys()))
         cli_sel = st.selectbox("Carregar Dados de Cliente Existente", lista_cli)
@@ -648,6 +652,14 @@ elif menu == "📂 Rascunhos de Vistoria":
 elif menu == "📅 Agenda de Atividades":
     st.header("📅 Agenda de Atividades & Manutenções")
     
+    # Leitura blindada contra falhas de esquema SQLite
+    conn = sqlite3.connect(DB_FILE)
+    try:
+        df_agenda = pd.read_sql_query("SELECT id AS ID, task AS Tarefa, category AS Categoria, due_date AS 'Data Prevista', status AS Status FROM agenda WHERE ativo = 1 ORDER BY due_date ASC", conn)
+    except Exception:
+        df_agenda = pd.DataFrame(columns=["ID", "Tarefa", "Categoria", "Data Prevista", "Status"])
+    conn.close()
+
     tab_a1, tab_a2 = st.tabs(["📆 Visualizar Calendário Mensal", "➕ Nova Atividade / Registro"])
     
     with tab_a2:
@@ -655,24 +667,22 @@ elif menu == "📅 Agenda de Atividades":
             nova_tarefa = st.text_input("Descrição da Tarefa / Atividade / Cobrança")
             categoria = st.selectbox("Categoria", ["Atividade Técnica", "Manutenção Preventiva", "Cobrança / Pagamento", "Diária"])
             data_prev = st.date_input("Data Prevista", datetime.now())
-            status_inicial = st.selectbox("Status", ["Não realizado", "Realizado", "Pendente"])
+            status_inicial = st.selectbox("Status", ["Pendente", "Realizado", "Não realizado"])
             
             if st.form_submit_button("➕ Adicionar à Agenda", type="primary"):
-                if nova_tarefa:
+                if nova_tarefa.strip():
                     conn = sqlite3.connect(DB_FILE)
                     cursor = conn.cursor()
-                    cursor.execute("INSERT INTO agenda (task, category, due_date, status) VALUES (?, ?, ?, ?)",
+                    cursor.execute("INSERT INTO agenda (task, category, due_date, status, ativo) VALUES (?, ?, ?, ?, 1)",
                                    (nova_tarefa, categoria, data_prev.strftime("%Y-%m-%d"), status_inicial))
                     conn.commit()
                     conn.close()
                     st.success("Item adicionado à agenda!")
                     st.rerun()
+                else:
+                    st.warning("Preencha a descrição da tarefa.")
 
     with tab_a1:
-        conn = sqlite3.connect(DB_FILE)
-        df_agenda = pd.read_sql_query("SELECT id AS ID, task AS Tarefa, category AS Categoria, due_date AS 'Data Prevista', status AS Status FROM agenda WHERE ativo = 1 ORDER BY due_date ASC", conn)
-        conn.close()
-
         col_m1, col_m2, col_m3 = st.columns([2, 2, 3])
         with col_m1:
             mes_sel = st.selectbox("Mês", list(range(1, 13)), index=datetime.now().month - 1)
