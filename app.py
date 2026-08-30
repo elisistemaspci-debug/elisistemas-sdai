@@ -17,7 +17,7 @@ DB_FILE = "banco.db"
 # FUNÇÕES DE BANCO DE DADOS
 # -----------------------------------------------------------------------------
 def init_db():
-    """Inicializa as tabelas e aplica as alterações necessárias."""
+    """Garante que as tabelas existam sem alterar estrutura de colunas existentes."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
@@ -27,8 +27,7 @@ def init_db():
             task TEXT,
             category TEXT,
             due_date TEXT,
-            status TEXT,
-            ativo INTEGER DEFAULT 1
+            status TEXT
         )
     """)
     
@@ -53,37 +52,21 @@ def init_db():
         )
     """)
     
-    # Adiciona a coluna 'ativo' na tabela agenda caso ela tenha sido criada em versão legada sem ela
-    try:
-        cursor.execute("ALTER TABLE agenda ADD COLUMN ativo INTEGER DEFAULT 1")
-    except sqlite3.OperationalError:
-        pass # Coluna já existe
-        
     conn.commit()
     conn.close()
 
 def get_agenda_data():
-    """Retorna os dados da agenda com compatibilidade total para bancos antigos sem a coluna 'ativo'."""
+    """Busca direta sem nenhum filtro extra, garantindo 100% de leitura do banco antigo."""
     conn = sqlite3.connect(DB_FILE)
     try:
-        # COALESCE garante que registros antigos com ativo NULL sejam tratados como 1 (visíveis)
         df = pd.read_sql_query(
             "SELECT id AS ID, task AS Tarefa, category AS Categoria, due_date AS 'Data Prevista', status AS Status "
             "FROM agenda "
-            "WHERE COALESCE(ativo, 1) = 1 "
             "ORDER BY due_date ASC", 
             conn
         )
     except Exception:
-        try:
-            df = pd.read_sql_query(
-                "SELECT id AS ID, task AS Tarefa, category AS Categoria, due_date AS 'Data Prevista', status AS Status "
-                "FROM agenda "
-                "ORDER BY due_date ASC", 
-                conn
-            )
-        except Exception:
-            df = pd.DataFrame(columns=["ID", "Tarefa", "Categoria", "Data Prevista", "Status"])
+        df = pd.DataFrame(columns=["ID", "Tarefa", "Categoria", "Data Prevista", "Status"])
     finally:
         conn.close()
     return df
@@ -92,7 +75,7 @@ def add_task(task, category, due_date, status="Não realizado"):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO agenda (task, category, due_date, status, ativo) VALUES (?, ?, ?, ?, 1)",
+        "INSERT INTO agenda (task, category, due_date, status) VALUES (?, ?, ?, ?)",
         (task, category, str(due_date), status)
     )
     conn.commit()
@@ -105,10 +88,11 @@ def update_task_status(task_id, new_status):
     conn.commit()
     conn.close()
 
-def soft_delete_task(task_id):
+def delete_task(task_id):
+    """Deleta o registro diretamente do banco de dados."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("UPDATE agenda SET ativo = 0 WHERE id = ?", (task_id,))
+    cursor.execute("DELETE FROM agenda WHERE id = ?", (task_id,))
     conn.commit()
     conn.close()
 
@@ -151,10 +135,10 @@ with st.sidebar:
 if menu == "📅 Agenda de Atividades":
     st.header("📅 Agenda de Atividades")
     
-    # Carrega os dados atualizados
+    # Carrega dados do banco
     df_agenda = get_agenda_data()
     
-    # Formulário para nova tarefa rápida
+    # Formulário para nova tarefa
     with st.expander("➕ Adicionar Nova Tarefa à Agenda"):
         with st.form("form_nova_tarefa", clear_on_submit=True):
             col_t1, col_t2, col_t3 = st.columns([3, 1.5, 1.5])
@@ -171,14 +155,14 @@ if menu == "📅 Agenda de Atividades":
                 st.success("Tarefa registrada com sucesso!")
                 st.rerun()
 
-    # Filtro de Mês e Ano para o Calendário
+    # Seleção de Mês e Ano para o Calendário
     col_m1, col_m2 = st.columns([2, 4])
     with col_m1:
         hoje = datetime.date.today()
         mes_selecionado = st.selectbox("Mês", list(range(1, 13)), index=hoje.month - 1, format_func=lambda m: calendar.month_name[m])
         ano_selecionado = st.number_input("Ano", min_value=2020, max_value=2030, value=hoje.year)
 
-    # Construção do Calendário Visual
+    # Renderização do Calendário
     cal = calendar.monthcalendar(ano_selecionado, mes_selecionado)
     dias_semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
     
@@ -205,7 +189,7 @@ if menu == "📅 Agenda de Atividades":
 
     st.markdown("---")
 
-    # Lista e Gestão Completa de Tarefas
+    # Lista Completa de Tarefas
     with st.expander("📋 Ver Lista Completa de Tarefas e Gerenciar Status", expanded=True):
         if df_agenda.empty:
             st.warning("Nenhuma atividade encontrada na base de dados.")
@@ -231,7 +215,7 @@ if menu == "📅 Agenda de Atividades":
                         st.rerun()
                 with col_c5:
                     if st.button("🗑️", key=f"del_{row['ID']}"):
-                        soft_delete_task(row["ID"])
+                        delete_task(row["ID"])
                         st.rerun()
                 st.divider()
 
