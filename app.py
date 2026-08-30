@@ -524,6 +524,7 @@ with st.sidebar:
 
     if st.session_state["perfil"] == "master":
         opcoes_menu = [
+            "🏠 Painel Principal",
             "📋 Nova Vistoria / Laudo", 
             "📂 Rascunhos de Vistoria", 
             "📊 Controle de Vencimentos",
@@ -543,7 +544,83 @@ with st.sidebar:
 # 7. ROTINAS DE PÁGINAS DO MENU
 # ==============================================================================
 
-if menu == "📋 Nova Vistoria / Laudo":
+if menu == "🏠 Painel Principal" and st.session_state["perfil"] == "master":
+    st.header(f"⚡ Painel de Controle - Bem-vindo(a), {st.session_state['user']}")
+    st.markdown(f"📅 **Data de Hoje:** {datetime.now().strftime('%d/%m/%Y')}")
+    st.divider()
+
+    # --- BLOCO 1: INDICADORES RÁPIDOS (METRICS) ---
+    chamados_abertos = [c for c in chamados_db if c.get("status") in ["Aberto", "Pendente", "Em andamento"]]
+    
+    total_venc_alerta = 0
+    for cli_v, d_v in vencimentos_db.items():
+        for item_k in ["deteccao", "extintores", "mangueiras", "avcb"]:
+            dt_val = d_v.get(item_k, "")
+            if dt_val:
+                st_txt, _ = calcular_status_vencimento(dt_val)
+                if "VENCIDO" in st_txt or "VENCE EM BREVE" in st_txt:
+                    total_venc_alerta += 1
+
+    hoje_str = datetime.now().strftime("%Y-%m-%d")
+    conn_d = sqlite3.connect(DB_FILE)
+    try:
+        df_agenda_hoje = pd.read_sql_query(
+            "SELECT * FROM agenda WHERE due_date = ? AND status != 'Realizado'", 
+            conn_d, params=(hoje_str,)
+        )
+    except Exception:
+        df_agenda_hoje = pd.DataFrame()
+    conn_d.close()
+
+    col_m1, col_m2, col_m3 = st.columns(3)
+    col_m1.metric("📅 Atividades Pendentes Para Hoje", len(df_agenda_hoje))
+    col_m2.metric("🎫 Chamados Abertos / Pendentes", len(chamados_abertos))
+    col_m3.metric("🚨 Vencimentos Vencidos / Próximos", total_venc_alerta)
+
+    st.divider()
+
+    # --- BLOCO 2: DETALHES DO DIA ---
+    col_d1, col_d2 = st.columns(2)
+
+    with col_d1:
+        st.subheader("📆 Atividades Agendadas Para Hoje")
+        if not df_agenda_hoje.empty:
+            for _, row in df_agenda_hoje.iterrows():
+                st.info(f"**[{row['category']}]** {row['task']} (Status: *{row['status']}*)")
+        else:
+            st.success("Nenhuma atividade pendente para hoje na agenda! 🎉")
+
+        st.subheader("🎫 Chamados Técnicos Pendentes")
+        if chamados_abertos:
+            for ch in chamados_abertos:
+                st.warning(f"**Cliente:** {ch.get('cliente')} | **Título:** {ch.get('titulo')} *(Status: {ch.get('status')})*")
+        else:
+            st.success("Nenhum chamado aberto no momento! 👍")
+
+    with col_d2:
+        st.subheader("📊 Alertas de Vencimentos (Prazo Curto / Vencidos)")
+        
+        lista_alertas_vis = []
+        for cli, d in vencimentos_db.items():
+            for tipo_serv, chave_dict in [("Detecção", "deteccao"), ("Extintores", "extintores"), ("Mangueiras", "mangueiras"), ("AVCB", "avcb")]:
+                data_v = d.get(chave_dict, "")
+                if data_v:
+                    rotulo_st, _ = calcular_status_vencimento(data_v)
+                    if "VENCIDO" in rotulo_st or "VENCE EM BREVE" in rotulo_st:
+                        lista_alertas_vis.append({
+                            "Cliente": cli,
+                            "Serviço": tipo_serv,
+                            "Vencimento": data_v,
+                            "Situação": rotulo_st
+                        })
+
+        if lista_alertas_vis:
+            df_alertas = pd.DataFrame(lista_alertas_vis)
+            st.dataframe(df_alertas, use_container_width=True, height=280)
+        else:
+            st.success("Todos os vencimentos estão em dia! Nenhum alerta para os próximos 30 dias.")
+
+elif menu == "📋 Nova Vistoria / Laudo":
     st.header("📋 Emissão de Relatório / Vistoria Preventiva")
     
     if clientes_db:
@@ -730,7 +807,7 @@ elif menu == "📂 Rascunhos de Vistoria":
 
 elif menu == "📊 Controle de Vencimentos":
     st.header("📊 Controle de Vencimentos & Oportunidades de Orçamento")
-    st.info("💡 **Aviso Automático de 30 Dias:** As células ganham destaque em amarelo quando estiverem a 1 mês do vencimento (ideal para ligar e ofertar orçamento) e em vermelho caso já estejam vencidas.")
+    st.info("💡 **Aviso Automático de 30 Days:** As células ganham destaque em amarelo quando estiverem a 1 mês do vencimento (ideal para ligar e ofertar orçamento) e em vermelho caso já estejam vencidas.")
 
     total_vencidos = 0
     total_alerta = 0
