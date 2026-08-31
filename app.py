@@ -1086,7 +1086,7 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
         "🔍 Consultar Clientes e Histórico", 
         "➕ Cadastrar / Editar Cliente", 
         "🗑️ Gerenciar / Arquivar Cliente",
-        "📥📤 Exportar / Importar Base"
+        "📥 Exportar / Importar Base"
     ])
     
     with tab_c2:
@@ -1136,89 +1136,58 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
 
     with tab_c4:
         st.subheader("Gestão de Backup e Transferência da Base de Clientes")
-        st.info("Utilize as opções abaixo para exportar a sua lista de clientes para CSV/Excel ou restaurá-la/atualizá-la enviando um arquivo preenchido.")
+        st.info("Utilize as opções abaixo para exportar sua lista de clientes para CSV/Excel ou importá-la enviando um arquivo preenchido.")
 
         if clientes_db:
-            lista_export = []
-            for cli_n, cli_v in clientes_db.items():
-                lista_export.append({
-                    "Cliente": cli_n,
-                    "CNPJ": cli_v.get("cnpj", ""),
-                    "Endereço": cli_v.get("endereco", ""),
-                    "Cidade / UF": cli_v.get("cidade_uf", ""),
-                    "Síndico": cli_v.get("sindico", ""),
-                    "Zelador": cli_v.get("zelador", ""),
-                    "Telefone": cli_v.get("telefone", ""),
-                    "E-mail": cli_v.get("email", ""),
-                    "Ativo": cli_v.get("ativo", True)
-                })
-            df_clientes_export = pd.DataFrame(lista_export)
-
-            col_exp1, col_exp2 = st.columns(2)
-            with col_exp1:
-                csv_data = df_clientes_export.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📥 Baixar Clientes em CSV",
-                    data=csv_data,
-                    file_name=f"clientes_elisistemas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv",
-                    type="primary"
-                )
-            with col_exp2:
-                excel_buffer = io.BytesIO()
-                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                    df_clientes_export.to_excel(writer, index=False, sheet_name='Clientes')
-                excel_bytes = excel_buffer.getvalue()
-                st.download_button(
-                    label="📥 Baixar Clientes em Excel (.xlsx)",
-                    data=excel_bytes,
-                    file_name=f"clientes_elisistemas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary"
-                )
-        else:
-            st.warning("Não há clientes cadastrados para exportar.")
+            df_export = pd.DataFrame.from_dict(clientes_db, orient='index').reset_index()
+            df_export = df_export.rename(columns={'index': 'Nome'})
+            
+            col_ex1, col_ex2 = st.columns(2)
+            with col_ex1:
+                csv_data = df_export.to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Baixar Clientes em CSV", csv_data, "clientes.csv", "text/csv")
+            with col_ex2:
+                output_xlsx = io.BytesIO()
+                with pd.ExcelWriter(output_xlsx, engine='openpyxl') as writer:
+                    df_export.to_excel(writer, index=False, sheet_name='Clientes')
+                st.download_button("📥 Baixar Clientes em Excel (.xlsx)", output_xlsx.getvalue(), "clientes.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         st.markdown("---")
         st.subheader("Importar Base de Clientes (Upload)")
-        uploaded_clientes_file = st.file_uploader("Selecione um arquivo CSV ou Excel (.xlsx) preenchido com os clientes", type=["csv", "xlsx"])
+        arquivo_importado = st.file_uploader("Selecione um arquivo CSV ou Excel (.xlsx) preenchido com os clientes", type=["csv", "xlsx"])
         
-        if uploaded_clientes_file is not None:
-            try:
-                if uploaded_clientes_file.name.endswith('.csv'):
-                    df_import = pd.read_csv(uploaded_clientes_file)
-                else:
-                    df_import = pd.read_excel(uploaded_clientes_file)
-
-                st.write("Prévia dos dados importados:", df_import.head())
-
-                modo_import = st.radio("Modo de Importação", ["Mesclar com a base existente", "Substituir totalmente a base existente"])
-
-                if st.button("Confirmar Importação da Base", type="primary"):
-                    if modo_import == "Substituir totalmente a base existente":
-                        clientes_db.clear()
-
-                    import_count = 0
-                    for _, row in df_import.iterrows():
-                        nome_c = str(row.get("Cliente", "")).strip().upper()
-                        if nome_c and nome_c != "NAN":
+        if arquivo_importado is not None:
+            if st.button("🔄 Processar e Importar Planilha", type="primary"):
+                try:
+                    if arquivo_importado.name.endswith('.csv'):
+                        df_imp = pd.read_csv(arquivo_importado)
+                    else:
+                        df_imp = pd.read_excel(arquivo_importado)
+                    
+                    df_imp.columns = [str(col).strip().lower() for col in df_imp.columns]
+                    col_nome = next((c for c in df_imp.columns if 'nome' in c or 'cliente' in c), df_imp.columns[0])
+                    
+                    importados_count = 0
+                    for _, row in df_imp.iterrows():
+                        nome_c = str(row.get(col_nome, '')).strip().upper()
+                        if nome_c and nome_c != 'NAN':
                             clientes_db[nome_c] = {
-                                "cnpj": str(row.get("CNPJ", "")) if pd.notna(row.get("CNPJ", "")) else "",
-                                "endereco": str(row.get("Endereço", "")) if pd.notna(row.get("Endereço", "")) else "",
-                                "cidade_uf": str(row.get("Cidade / UF", "")) if pd.notna(row.get("Cidade / UF", "")) else "Ribeirão Preto - SP",
-                                "sindico": str(row.get("Síndico", "")) if pd.notna(row.get("Síndico", "")) else "",
-                                "zelador": str(row.get("Zelador", "")) if pd.notna(row.get("Zelador", "")) else "",
-                                "telefone": str(row.get("Telefone", "")) if pd.notna(row.get("Telefone", "")) else "",
-                                "email": str(row.get("E-mail", "")) if pd.notna(row.get("E-mail", "")) else "",
-                                "ativo": bool(row.get("Ativo", True))
+                                "cnpj": str(row.get('cnpj', '')),
+                                "endereco": str(row.get('endereco', '')),
+                                "cidade_uf": str(row.get('cidade_uf', 'Ribeirão Preto - SP')),
+                                "sindico": str(row.get('sindico', '')),
+                                "zelador": str(row.get('zelador', '')),
+                                "telefone": str(row.get('telefone', '')),
+                                "email": str(row.get('email', '')),
+                                "ativo": True
                             }
-                            import_count += 1
-
+                            importados_count += 1
+                            
                     salvar_json(CLIENTES_FILE, clientes_db)
-                    st.success(f"{import_count} clientes importados/atualizados com sucesso! Atualize a página.")
+                    st.success(f"Sucesso! {importados_count} clientes importados e salvos na base de dados.")
                     st.rerun()
-            except Exception as e:
-                st.error(f"Erro ao processar o arquivo importado: {e}")
+                except Exception as e:
+                    st.error(f"Erro ao ler o arquivo: {e}")
 
     with tab_c1:
         st.subheader("Base de Clientes")
