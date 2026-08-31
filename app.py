@@ -7,12 +7,22 @@ import hashlib
 import calendar
 import zipfile
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import streamlit as st
 import pandas as pd
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, KeepTogether
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
+
+# ==============================================================================
+# 0. CONFIGURAÇÃO DE FUSO HORÁRIO LOCAL (BRASÍLIA)
+# ==============================================================================
+TZ_LOCAL = ZoneInfo("America/Sao_Paulo")
+
+def obter_agora():
+    """Retorna a data e hora atual ajustada para o fuso horário de Brasília."""
+    return datetime.now(TZ_LOCAL)
 
 # ==============================================================================
 # 1. CONFIGURAÇÃO DA PÁGINA E ATRIBUIÇÃO DE DIRETÓRIOS/ARQUIVOS
@@ -67,7 +77,7 @@ init_db()
 
 def perform_backup_completo():
     """Atribuição: Compactar 100% da base SQLite, arquivos JSON, históricos e fotos de forma segura e tolerante a falhas."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = obter_agora().strftime("%Y%m%d_%H%M%S")
     zip_filename = f"backup_completo_elisistemas_{timestamp}.zip"
     zip_path = os.path.join(BACKUP_DIR, zip_filename)
     
@@ -162,7 +172,7 @@ def registrar_historico_cliente(nome_cliente, tipo_acao, detalhes_dict, pdf_byte
         except Exception:
             pass
 
-    agora_dt = datetime.now()
+    agora_dt = obter_agora().replace(tzinfo=None) # Removendo tzinfo para compatibilidade com strings formatadas do banco
     atual_parecer = detalhes_dict.get("parecer", detalhes_dict.get("descricao", ""))
     
     is_duplicate = False
@@ -254,7 +264,7 @@ def calcular_status_vencimento(data_str):
         return "⚪ Não Informado", "gray"
     try:
         dt_venc = datetime.strptime(data_str, "%Y-%m-%d").date()
-        hoje = datetime.now().date()
+        hoje = obter_agora().date()
         dias_restantes = (dt_venc - hoje).days
 
         if dias_restantes < 0:
@@ -326,7 +336,7 @@ def gerar_pdf_vencimentos(vencimentos_data):
 
     story.append(Paragraph(f"<b>{empresa_db.get('nome', 'ELI SISTEMAS')}</b>", style_title))
     story.append(Paragraph(f"CNPJ: {empresa_db.get('cnpj', '')} | Tel: {empresa_db.get('telefone', '')} | E-mail: {empresa_db.get('email', '')}", style_sub))
-    story.append(Paragraph(f"<b>RELATÓRIO DE CONTROLE DE VENCIMENTOS & PREVENTIVAS</b> - Emitido em: {datetime.now().strftime('%d/%m/%Y')}", style_sub))
+    story.append(Paragraph(f"<b>RELATÓRIO DE CONTROLE DE VENCIMENTOS & PREVENTIVAS</b> - Emitido em: {obter_agora().strftime('%d/%m/%Y')}", style_sub))
     story.append(Spacer(1, 10))
 
     cabecalho = [
@@ -532,7 +542,7 @@ def inicializar_defaults():
     defaults = {
         "cliente": "", "cnpj": "", "endereco": "", "cidade_uf": "Ribeirão Preto - SP",
         "sindico": "", "zelador": "", "contato": "", "email": "",
-        "data_visita": datetime.now().strftime("%Y-%m-%d"), "tipo_visita": "Preventiva Trimestral",
+        "data_visita": obter_agora().strftime("%Y-%m-%d"), "tipo_visita": "Preventiva Trimestral",
         "resp_tecnico": empresa_db.get("resp_tecnico", "Eli Silva"), "acompanhante": "",
         "status_geral": "CONFORME / SISTEMA OPERACIONAL", "central_sdai": "",
         "tipo_central": "SISTEMA ENDEREÇÁVEL", "qtd_lacos": "", "det_fumaca": "",
@@ -594,7 +604,7 @@ with st.sidebar:
 
 if menu == "🏠 Painel Principal" and st.session_state["perfil"] == "master":
     st.header(f"⚡ Painel de Controle - Bem-vindo(a), {st.session_state['user']}")
-    st.markdown(f"📅 **Data de Hoje:** {datetime.now().strftime('%d/%m/%Y')}")
+    st.markdown(f"📅 **Data de Hoje:** {obter_agora().strftime('%d/%m/%Y')}")
     st.divider()
 
     chamados_abertos = [c for c in chamados_db if c.get("status") in ["Aberto", "Pendente", "Em andamento"]]
@@ -608,7 +618,7 @@ if menu == "🏠 Painel Principal" and st.session_state["perfil"] == "master":
                 if "VENCIDO" in st_txt or "VENCE EM BREVE" in st_txt:
                     total_venc_alerta += 1
 
-    hoje_str = datetime.now().strftime("%Y-%m-%d")
+    hoje_str = obter_agora().strftime("%Y-%m-%d")
     conn_d = sqlite3.connect(DB_FILE)
     try:
         df_agenda_hoje = pd.read_sql_query(
@@ -688,7 +698,7 @@ elif menu == "📋 Nova Vistoria / Laudo":
         st.session_state["contato"] = st.text_input("Contato / Telefone", value=st.session_state["contato"])
     with col2:
         st.session_state["endereco"] = st.text_input("Endereço", value=st.session_state["endereco"])
-        st.session_state["data_visita"] = st.date_input("Data da Visita", datetime.strptime(st.session_state["data_visita"], "%Y-%m-%d") if isinstance(st.session_state["data_visita"], str) else datetime.now()).strftime("%Y-%m-%d")
+        st.session_state["data_visita"] = st.date_input("Data da Visita", datetime.strptime(st.session_state["data_visita"], "%Y-%m-%d") if isinstance(st.session_state["data_visita"], str) else obter_agora()).strftime("%Y-%m-%d")
         
         opcoes_visita = [
             "Preventiva Mensal", 
@@ -809,7 +819,7 @@ elif menu == "📋 Nova Vistoria / Laudo":
                         dados_json = excluded.dados_json,
                         atualizado_em = excluded.atualizado_em
                     """,
-                    (nome_cli_rasc, st.session_state["data_visita"], json.dumps(estado_completo), datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    (nome_cli_rasc, st.session_state["data_visita"], json.dumps(estado_completo), obter_agora().strftime("%Y-%m-%d %H:%M:%S"))
                 )
                 conn.commit()
                 conn.close()
@@ -905,16 +915,16 @@ elif menu == "📊 Controle de Vencimentos":
             st.caption("Deixe em branco ou selecione a data correspondente ao próximo vencimento do serviço:")
             c1, c2, c3, c4 = st.columns(4)
             with c1:
-                dt_det = st.date_input("Tipo Detecção", value=datetime.strptime(dados_existentes.get("deteccao"), "%Y-%m-%d") if dados_existentes.get("deteccao") else datetime.now())
+                dt_det = st.date_input("Tipo Detecção", value=datetime.strptime(dados_existentes.get("deteccao"), "%Y-%m-%d") if dados_existentes.get("deteccao") else obter_agora())
                 chk_det = st.checkbox("Ativar Detecção", value=bool(dados_existentes.get("deteccao")))
             with c2:
-                dt_ext = st.date_input("Extintores", value=datetime.strptime(dados_existentes.get("extintores"), "%Y-%m-%d") if dados_existentes.get("extintores") else datetime.now())
+                dt_ext = st.date_input("Extintores", value=datetime.strptime(dados_existentes.get("extintores"), "%Y-%m-%d") if dados_existentes.get("extintores") else obter_agora())
                 chk_ext = st.checkbox("Ativar Extintores", value=bool(dados_existentes.get("extintores")))
             with c3:
-                dt_man = st.date_input("Mangueiras", value=datetime.strptime(dados_existentes.get("mangueiras"), "%Y-%m-%d") if dados_existentes.get("mangueiras") else datetime.now())
+                dt_man = st.date_input("Mangueiras", value=datetime.strptime(dados_existentes.get("mangueiras"), "%Y-%m-%d") if dados_existentes.get("mangueiras") else obter_agora())
                 chk_man = st.checkbox("Ativar Mangueiras", value=bool(dados_existentes.get("mangueiras")))
             with c4:
-                dt_avcb = st.date_input("AVCB", value=datetime.strptime(dados_existentes.get("avcb"), "%Y-%m-%d") if dados_existentes.get("avcb") else datetime.now())
+                dt_avcb = st.date_input("AVCB", value=datetime.strptime(dados_existentes.get("avcb"), "%Y-%m-%d") if dados_existentes.get("avcb") else obter_agora())
                 chk_avcb = st.checkbox("Ativar AVCB", value=bool(dados_existentes.get("avcb")))
 
             obs_venc = st.text_area("Observação / Anotações de Atendimento", value=dados_existentes.get("obs", ""))
@@ -962,7 +972,7 @@ elif menu == "📊 Controle de Vencimentos":
                 st.download_button(
                     label="🖨️ Imprimir / Baixar Relatório PDF",
                     data=pdf_venc_bytes,
-                    file_name=f"Relatorio_Vencimentos_{datetime.now().strftime('%Y%m%d')}.pdf",
+                    file_name=f"Relatorio_Vencimentos_{obter_agora().strftime('%Y%m%d')}.pdf",
                     mime="application/pdf",
                     type="primary"
                 )
@@ -996,7 +1006,7 @@ elif menu == "📅 Agenda de Atividades":
         with st.form("form_nova_agenda"):
             nova_tarefa = st.text_input("Descrição da Tarefa / Atividade / Cobrança")
             categoria = st.selectbox("Categoria", ["Atividade Técnica", "Manutenção Preventiva", "Cobrança / Pagamento", "Diária"])
-            data_prev = st.date_input("Data Prevista", datetime.now())
+            data_prev = st.date_input("Data Prevista", obter_agora())
             status_inicial = st.selectbox("Status", ["Não realizado", "Realizado", "Pendente"])
             
             if st.form_submit_button("➕ Adicionar à Agenda", type="primary"):
@@ -1015,9 +1025,9 @@ elif menu == "📅 Agenda de Atividades":
     with tab_a1:
         col_m1, col_m2, col_m3 = st.columns([2, 2, 3])
         with col_m1:
-            mes_sel = st.selectbox("Mês", list(range(1, 13)), index=datetime.now().month - 1)
+            mes_sel = st.selectbox("Mês", list(range(1, 13)), index=obter_agora().month - 1)
         with col_m2:
-            ano_sel = st.number_input("Ano", min_value=2024, max_value=2030, value=datetime.now().year)
+            ano_sel = st.number_input("Ano", min_value=2024, max_value=2030, value=obter_agora().year)
             
         cal = calendar.monthcalendar(ano_sel, mes_sel)
         dias_semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
@@ -1036,7 +1046,7 @@ elif menu == "📅 Agenda de Atividades":
                 with cols_dia[idx_dia]:
                     if dia_num != 0:
                         data_str = f"{ano_sel}-{mes_sel:02d}-{dia_num:02d}"
-                        e_hoje = (data_str == datetime.now().strftime("%Y-%m-%d"))
+                        e_hoje = (data_str == obter_agora().strftime("%Y-%m-%d"))
                         label_dia = f"**{dia_num}** 📍" if e_hoje else f"**{dia_num}**"
                         st.markdown(label_dia)
 
@@ -1222,7 +1232,7 @@ elif menu == "📂 Clientes & Histórico" and st.session_state["perfil"] == "mas
                     if st.session_state.get(session_key_upload) != pdf_hash:
                         st.session_state[session_key_upload] = pdf_hash
                         
-                        timestamp_upload = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        timestamp_upload = obter_agora().strftime('%Y%m%d_%H%M%S')
                         nome_pdf_salvo = f"Preventiva_Anterior_{timestamp_upload}.pdf"
                         caminho_salvamento_cli = os.path.join(pdf_upload_dir, nome_pdf_salvo)
                         
@@ -1347,7 +1357,7 @@ elif menu == "🎫 Chamados Técnicos":
                         "cliente": cliente_chamado,
                         "titulo": titulo_chamado,
                         "descricao": desc_chamado,
-                        "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "data": obter_agora().strftime("%Y-%m-%d %H:%M:%S"),
                         "status": "Aberto"
                     }
                     chamados_db.append(novo_registro)
